@@ -80,10 +80,10 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
-        if not options["reset"] and Client.objects.filter(slug=CLIENT_SLUG).exists():
+        if not options["reset"] and Client.objects.filter(pk=1).exists():
             self.stdout.write(
                 self.style.WARNING(
-                    f"[SKIP] Mock data already loaded (Client '{CLIENT_NAME}' exists). "
+                    "[SKIP] Mock data already loaded (Client pk=1 exists). "
                     "Run with --reset to reload."
                 )
             )
@@ -128,8 +128,8 @@ class Command(BaseCommand):
 
     def _create_client(self) -> Client:
         client, created = Client.objects.get_or_create(
-            slug=CLIENT_SLUG,
-            defaults={"name": CLIENT_NAME},
+            pk=1,
+            defaults={"name": CLIENT_NAME, "slug": CLIENT_SLUG},
         )
         verb = "Created" if created else "Found existing"
         self.stdout.write(f"[OK]   {verb} client: {client.name} (pk={client.pk})")
