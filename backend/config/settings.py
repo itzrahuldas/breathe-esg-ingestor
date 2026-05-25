@@ -27,8 +27,14 @@ SECRET_KEY = config(
 )
 DEBUG = config("DEBUG", default=True, cast=bool)
 
-# Allow all hosts for prototype — tighten per Render domain in Phase 6+
+# Allow all hosts — prototype deployment on Render / Vercel
+# Override via ALLOWED_HOSTS env var (comma-separated) if needed
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*", cast=Csv())
+
+# Always include the Render-assigned domain regardless of env var
+RENDER_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+if RENDER_HOSTNAME and RENDER_HOSTNAME not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RENDER_HOSTNAME)
 
 # ------------------------------------------------------------------
 # Applications
