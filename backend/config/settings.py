@@ -74,7 +74,14 @@ CORS_ALLOW_CREDENTIALS = True
 # ------------------------------------------------------------------
 # Django REST Framework
 # ------------------------------------------------------------------
+# In production (DEBUG=False) use JSON only — avoids TemplateDoesNotExist for
+# rest_framework/api.html and is safer for public-facing APIs.
+_drf_renderers = ["rest_framework.renderers.JSONRenderer"]
+if DEBUG:
+    _drf_renderers.append("rest_framework.renderers.BrowsableAPIRenderer")
+
 REST_FRAMEWORK = {
+    "DEFAULT_RENDERER_CLASSES": _drf_renderers,
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
@@ -85,6 +92,23 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
 }
+
+# ------------------------------------------------------------------
+# Templates (required for DRF browsable API and Django error pages)
+# ------------------------------------------------------------------
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+            ],
+        },
+    },
+]
 
 # ------------------------------------------------------------------
 # URL routing & WSGI
