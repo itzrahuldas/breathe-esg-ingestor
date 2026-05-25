@@ -76,6 +76,16 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
+        # Bug 4 fix: idempotent guard — skip if data already loaded
+        if not options["reset"] and Client.objects.filter(name="Acme Corp Ltd").exists():
+            self.stdout.write(
+                self.style.WARNING(
+                    "[SKIP] Sample data already loaded (Client 'Acme Corp Ltd' exists). "
+                    "Run with --reset to reload."
+                )
+            )
+            return
+
         if options["reset"]:
             self._reset()
 

@@ -25,7 +25,7 @@ SECRET_KEY = config(
     "DJANGO_SECRET_KEY",
     default="dev-insecure-key-change-me-in-production-breathe-esg-2024",
 )
-DEBUG = config("DEBUG", default=True, cast=bool)
+DEBUG = config("DEBUG", default=False, cast=bool)
 
 # Allow all hosts — prototype deployment on Render / Vercel
 # Override via ALLOWED_HOSTS env var (comma-separated) if needed
