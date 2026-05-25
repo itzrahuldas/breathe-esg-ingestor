@@ -112,15 +112,17 @@ class Command(BaseCommand):
 
     def _reset(self):
         self.stdout.write(self.style.WARNING("[RESET] Wiping existing data..."))
-        # AuditLog.delete() raises ValueError (append-only guard) so bypass via raw SQL
+        # TRUNCATE with RESTART IDENTITY resets the pk sequence so Client always
+        # gets pk=1, matching the hardcoded VITE_CLIENT_ID=1 on the frontend.
         from django.db import connection
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM ingestor_auditlog")
-        ActivityRow.objects.all().delete()
-        RawUpload.objects.all().delete()
-        PlantCode.objects.all().delete()
-        Client.objects.filter(slug=CLIENT_SLUG).delete()
-        self.stdout.write("       Cleared: AuditLogs, ActivityRows, RawUploads, PlantCodes, Client.")
+            # Truncate leaf tables first to satisfy FK constraints, then root.
+            cursor.execute("TRUNCATE TABLE ingestor_auditlog")
+            cursor.execute("TRUNCATE TABLE ingestor_activityrow")
+            cursor.execute("TRUNCATE TABLE ingestor_rawupload")
+            cursor.execute("TRUNCATE TABLE ingestor_plantcode")
+            cursor.execute("TRUNCATE TABLE ingestor_client RESTART IDENTITY")
+        self.stdout.write("       Cleared + sequences reset: Client pk will restart at 1.")
 
     # ------------------------------------------------------------------
 

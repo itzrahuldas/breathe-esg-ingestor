@@ -1,1 +1,1 @@
-web: python manage.py migrate && python manage.py seed_mock_data && gunicorn config.wsgi --log-file -
+web: python manage.py migrate && python manage.py seed_mock_data --reset && gunicorn config.wsgi --log-file -
