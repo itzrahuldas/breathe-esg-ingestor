@@ -13,6 +13,7 @@ from ingestor.views import (
     BulkApproveView,
     RejectRowView,
     RowListView,
+    SetupView,
     SummaryView,
     UploadView,
 )
@@ -30,6 +31,9 @@ def health_check(request):
 urlpatterns = [
     # Health check — root path
     path("", health_check, name="health-check"),
+
+    # One-time demo bootstrap — creates Client pk=1 and PlantCodes
+    path("api/setup/", SetupView.as_view(), name="api-setup"),
 
     # Upload
     path("api/upload/", UploadView.as_view(), name="api-upload"),

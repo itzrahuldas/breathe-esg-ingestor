@@ -27,7 +27,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import ActivityRow, AuditLog, Client, RawUpload
+from .models import ActivityRow, AuditLog, Client, PlantCode, RawUpload
 from .parsers.sap_parser import parse_sap_file
 from .parsers.utility_parser import parse_utility_file
 from .parsers.travel_parser import parse_travel_file
@@ -148,13 +148,12 @@ class UploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            client = Client.objects.get(pk=client_id)
-        except Client.DoesNotExist:
-            return Response(
-                {"error": f"Client with id={client_id} not found."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # Auto-create the demo client if it doesn't exist yet
+        # (handles cold-start on Render before seed_mock_data has run)
+        client, _ = Client.objects.get_or_create(
+            pk=client_id,
+            defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"},
+        )
 
         # --- Parse ---
         _, parser_fn = _SOURCE_TYPE_MAP[source_type]
@@ -481,3 +480,50 @@ class AuditLogView(APIView):
         page = paginator.paginate_queryset(qs, request)
         serializer = AuditLogSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
+
+
+# ===========================================================================
+# GET /api/setup/  — one-time demo bootstrap (idempotent)
+# ===========================================================================
+
+_DEMO_PLANT_CODES = [
+    {"code": "IN01", "site_name": "Mumbai Plant",     "country": "IN"},
+    {"code": "IN02", "site_name": "Pune Factory",     "country": "IN"},
+    {"code": "IN03", "site_name": "Chennai Plant",    "country": "IN"},
+    {"code": "IN04", "site_name": "Hyderabad Campus", "country": "IN"},
+    {"code": "DE07", "site_name": "Frankfurt Office", "country": "DE"},
+]
+
+
+class SetupView(APIView):
+    """
+    Idempotent bootstrap endpoint. Creates the demo Client (pk=1) and
+    PlantCode reference rows if they don't already exist.
+
+    GET /api/setup/
+    Safe to call repeatedly - never overwrites existing data.
+    """
+
+    def get(self, request: Request) -> Response:
+        client, client_created = Client.objects.get_or_create(
+            pk=1,
+            defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"},
+        )
+
+        pc_created = 0
+        for pc in _DEMO_PLANT_CODES:
+            _, created = PlantCode.objects.get_or_create(
+                client=client,
+                code=pc["code"],
+                defaults={"site_name": pc["site_name"], "country": pc["country"]},
+            )
+            if created:
+                pc_created += 1
+
+        return Response({
+            "client_id": client.pk,
+            "client_name": client.name,
+            "client_created": client_created,
+            "plant_codes_created": pc_created,
+            "message": "Demo client ready. You can now upload CSV files.",
+        }, status=status.HTTP_200_OK)
