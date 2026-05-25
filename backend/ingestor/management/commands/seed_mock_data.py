@@ -112,8 +112,10 @@ class Command(BaseCommand):
 
     def _reset(self):
         self.stdout.write(self.style.WARNING("[RESET] Wiping existing data..."))
-        # AuditLog.delete() raises ValueError (append-only guard) so bypass via queryset
-        AuditLog.objects.all()._raw_delete(AuditLog.objects.db)  # type: ignore[attr-defined]
+        # AuditLog.delete() raises ValueError (append-only guard) so bypass via raw SQL
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM ingestor_auditlog")
         ActivityRow.objects.all().delete()
         RawUpload.objects.all().delete()
         PlantCode.objects.all().delete()
