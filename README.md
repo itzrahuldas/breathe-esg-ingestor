@@ -10,8 +10,8 @@ bookings — review, flag, approve, and audit every row with full traceability.
 
 | Field | Value |
 |---|---|
-| **Backend URL** | `https://breathe-esg-backend.onrender.com` |
-| **Frontend URL** | `https://breathe-esg-frontend.onrender.com` |
+| **Backend URL** | `https://breathe-esg-ingestor.onrender.com` |
+| **Frontend URL** | `https://breathe-esg-ingestor.vercel.app` |
 | **Username** | `analyst` |
 | **Password** | `demo1234` |
 
@@ -171,7 +171,7 @@ python -m pytest tests/ -v
 | `DEBUG` | `False` |
 | `ALLOWED_HOSTS` | `*` (prototype) |
 | `CORS_ALLOW_ALL` | `True` |
-| `VITE_API_BASE_URL` | `https://breathe-esg-backend.onrender.com` |
+| `VITE_API_BASE_URL` | `https://breathe-esg-ingestor.onrender.com` |
 | `VITE_CLIENT_ID` | `1` |
 
 ---

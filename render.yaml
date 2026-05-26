@@ -1,59 +1,25 @@
+databases:
+  - name: breathe-esg-db
+    databaseName: breathe_esg
+    user: breathe_esg_user
+    plan: free
+
 services:
-  # ── Django Backend ─────────────────────────────────────────────────────────
   - type: web
-    name: breathe-esg-backend
+    name: breathe-esg-ingestor
     runtime: python
     rootDir: backend
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
+    startCommand: python manage.py migrate && python manage.py seed_mock_data && gunicorn config.wsgi --log-file -
     plan: free
-    buildCommand: >
-      pip install -r requirements.txt &&
-      python manage.py collectstatic --noinput &&
-      python manage.py migrate &&
-      python manage.py load_sample_data
-    startCommand: gunicorn config.wsgi --log-file -
     envVars:
       - key: DJANGO_SECRET_KEY
-        generateValue: true          # Render auto-generates a strong secret
-      - key: DEBUG
-        value: "False"
-      - key: ALLOWED_HOSTS
-        value: "*"
-      - key: CORS_ALLOW_ALL
-        value: "True"
-      - key: LOG_LEVEL
-        value: INFO
+        generateValue: true
       - key: DATABASE_URL
         fromDatabase:
           name: breathe-esg-db
           property: connectionString
-
-  # ── Frontend (Render Static Site) ─────────────────────────────────────────
-  - type: web
-    name: breathe-esg-frontend
-    runtime: static
-    rootDir: frontend
-    plan: free
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    headers:
-      - path: /*
-        name: Cache-Control
-        value: no-cache
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    envVars:
-      - key: VITE_API_BASE_URL
-        fromService:
-          name: breathe-esg-backend
-          type: web
-          property: host
-          # Render exposes the backend as https://<service>.onrender.com
-          # The frontend env var will be set to that URL automatically.
-      - key: VITE_CLIENT_ID
-        value: "1"
-
-databases:
-  - name: breathe-esg-db
-    plan: free
+      - key: DEBUG
+        value: false
+      - key: CORS_ALLOW_ALL
+        value: true
