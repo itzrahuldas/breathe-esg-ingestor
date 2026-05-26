@@ -55,4 +55,8 @@ export const api = {
     const q = new URLSearchParams({ client_id: CLIENT_ID, ...params });
     return request(`/api/audit-log/?${q}`);
   },
+
+  deleteAll() {
+    return request(`/api/delete-all/?client_id=${CLIENT_ID}`, { method: 'DELETE' });
+  },
 };

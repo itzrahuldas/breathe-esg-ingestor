@@ -11,6 +11,7 @@ from ingestor.views import (
     AuditLogView,
     ApproveRowView,
     BulkApproveView,
+    DeleteAllDataView,
     RejectRowView,
     RowListView,
     SetupView,
@@ -34,6 +35,9 @@ urlpatterns = [
 
     # One-time demo bootstrap — creates Client pk=1 and PlantCodes
     path("api/setup/", SetupView.as_view(), name="api-setup"),
+
+    # Danger zone — wipe all client data and reseed demo dataset
+    path("api/delete-all/", DeleteAllDataView.as_view(), name="api-delete-all"),
 
     # Upload
     path("api/upload/", UploadView.as_view(), name="api-upload"),

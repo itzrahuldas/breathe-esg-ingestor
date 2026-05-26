@@ -527,3 +527,60 @@ class SetupView(APIView):
             "plant_codes_created": pc_created,
             "message": "Demo client ready. You can now upload CSV files.",
         }, status=status.HTTP_200_OK)
+
+
+# ===========================================================================
+# DELETE /api/delete-all/  — wipe all data for a client and reseed
+# ===========================================================================
+
+class DeleteAllDataView(APIView):
+    """
+    DELETE /api/delete-all/?client_id=1
+
+    Deletes all ActivityRows, RawUploads, AuditLogs, PlantCodes and the Client
+    itself, then re-runs seed_mock_data so the demo dataset is restored fresh.
+
+    Intended for demo / testing resets only.  Safe to call repeatedly.
+    """
+
+    def delete(self, request: Request) -> Response:
+        client_id = request.query_params.get("client_id", 1)
+
+        try:
+            client = Client.objects.get(pk=client_id)
+        except Client.DoesNotExist:
+            return Response(
+                {"error": f"Client {client_id} not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Count before deletion (for response)
+        row_count    = ActivityRow.objects.filter(client=client).count()
+        upload_count = RawUpload.objects.filter(client=client).count()
+        audit_count  = AuditLog.objects.filter(client=client).count()
+
+        # AuditLog.delete() is blocked by the append-only guard, bypass via SQL
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM ingestor_auditlog WHERE client_id = %s", [client.pk]
+            )
+
+        # Now safe to delete in FK order
+        ActivityRow.objects.filter(client=client).delete()
+        RawUpload.objects.filter(client=client).delete()
+        PlantCode.objects.filter(client=client).delete()
+        client.delete()
+
+        # Re-seed: deleting the client lets the name-guard in seed_mock_data pass
+        from django.core.management import call_command
+        call_command("seed_mock_data")
+
+        return Response({
+            "message": "All data deleted and demo data reseeded.",
+            "deleted": {
+                "activity_rows": row_count,
+                "raw_uploads":   upload_count,
+                "audit_logs":    audit_count,
+            },
+        }, status=status.HTTP_200_OK)

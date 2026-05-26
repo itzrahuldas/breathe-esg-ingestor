@@ -1,6 +1,7 @@
 // src/pages/Dashboard.jsx
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api';
+import { toast } from '../components/Toast';
 
 function MetricCard({ label, value, color }) {
   return (
@@ -56,12 +57,32 @@ function ScopeBar({ breakdown, total }) {
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    api.summary()
-      .then(setData)
-      .catch(e => setErr(e.message));
+  const loadSummary = useCallback(() => {
+    api.summary().then(setData).catch(e => setErr(e.message));
   }, []);
+
+  useEffect(() => { loadSummary(); }, [loadSummary]);
+
+  const handleDeleteAll = async () => {
+    const confirmed = window.confirm(
+      'Are you sure? This will delete ALL uploaded rows, uploads, and audit logs.\n' +
+      'Demo data will be reloaded. This cannot be undone.'
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    try {
+      await api.deleteAll();
+      toast('All data deleted. Demo data reloaded.', 'success');
+      setTimeout(() => loadSummary(), 1000);
+    } catch (e) {
+      toast('Delete failed — check console.', 'error');
+      console.error(e);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const fmt = (n) => n != null ? Number(n).toLocaleString('en-IN', { maximumFractionDigits: 1 }) : '—';
   const breakdown = data ? { 1: data.scope_breakdown?.['1'] ?? 0, 2: data.scope_breakdown?.['2'] ?? 0, 3: data.scope_breakdown?.['3'] ?? 0 } : {};
@@ -105,6 +126,53 @@ export default function Dashboard() {
           <div style={{ fontSize:'.75rem', color:'var(--text-muted)' }}>across all scopes, all sources</div>
         </div>
       </div>
+
+      <details style={{ marginTop: 40 }}>
+        <summary style={{ color: '#ff4444', cursor: 'pointer', fontSize: 13, userSelect: 'none', listStyle: 'none' }}>
+          ⚠️ Danger Zone
+        </summary>
+        <div style={{
+          border: '1px solid #ff4444',
+          borderRadius: 8,
+          padding: 20,
+          marginTop: 12,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 20,
+          flexWrap: 'wrap',
+        }}>
+          <div>
+            <div style={{ fontSize: '.82rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.08em', color: '#ff4444', marginBottom: 6 }}>Delete All Data &amp; Reset</div>
+            <div style={{ fontSize: '.82rem', color: 'var(--text-secondary)', maxWidth: 460 }}>
+              Permanently delete all uploaded data and restore the demo dataset.
+              This cannot be undone.
+            </div>
+          </div>
+          <button
+            onClick={handleDeleteAll}
+            disabled={deleting}
+            style={{
+              background: deleting ? '#660000' : '#cc0000',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '9px 20px',
+              fontWeight: 600,
+              fontSize: '.875rem',
+              cursor: deleting ? 'not-allowed' : 'pointer',
+              opacity: deleting ? 0.7 : 1,
+              transition: 'background 0.15s',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+            onMouseEnter={e => { if (!deleting) e.target.style.background = '#990000'; }}
+            onMouseLeave={e => { if (!deleting) e.target.style.background = '#cc0000'; }}
+          >
+            {deleting ? 'Deleting...' : 'Delete All Data & Reset'}
+          </button>
+        </div>
+      </details>
     </main>
   );
 }

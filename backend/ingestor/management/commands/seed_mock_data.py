@@ -80,13 +80,9 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
-        if not options["reset"] and Client.objects.filter(pk=1).exists():
-            self.stdout.write(
-                self.style.WARNING(
-                    "[SKIP] Mock data already loaded (Client pk=1 exists). "
-                    "Run with --reset to reload."
-                )
-            )
+        from ingestor.models import Client
+        if Client.objects.filter(name="Breathe Demo Corp").exists():
+            self.stdout.write("Demo data already exists. Skipping seed.")
             return
 
         if options["reset"]:
