@@ -397,7 +397,7 @@ def parse_travel_file(file_obj: IO[str], client_id: int, user_id: int) -> list[d
         raw_upload = RawUpload.objects.create(
             client=client,
             uploaded_by_id=user_id,
-            source_system=RawUpload.SOURCE_SAP,   # generic until SOURCE_TRAVEL added
+            source_system=RawUpload.SOURCE_TRAVEL,
             raw_payload=original_row,
         )
 

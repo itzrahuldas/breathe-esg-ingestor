@@ -439,7 +439,7 @@ def parse_utility_file(file_obj: IO[str], client_id: int, user_id: int) -> list[
         raw_upload = RawUpload.objects.create(
             client=client,
             uploaded_by_id=user_id,
-            source_system=RawUpload.SOURCE_SAP,   # reuse SOURCE_SAP as generic; SOURCE_UTILITY added in next phase
+            source_system=RawUpload.SOURCE_UTILITY,
             raw_payload=original_row,              # stored once, never updated
         )
 

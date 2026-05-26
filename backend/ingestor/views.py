@@ -214,10 +214,15 @@ class RowListView(APIView):
         if client_id:
             qs = qs.filter(client_id=client_id)
 
-        source_type = (request.query_params.get("source_type") or "").upper()
-        if source_type and source_type in _SOURCE_TYPE_MAP:
-            source_system, _ = _SOURCE_TYPE_MAP[source_type]
-            qs = qs.filter(raw_upload__source_system=source_system)
+        SOURCE_FILTER_MAP = {
+            "SAP":     RawUpload.SOURCE_SAP,
+            "UTILITY": RawUpload.SOURCE_UTILITY,
+            "TRAVEL":  RawUpload.SOURCE_TRAVEL,
+        }
+        source_param = request.query_params.get("source_type")
+        if source_param:
+            mapped_source = SOURCE_FILTER_MAP.get(source_param.upper(), source_param)
+            qs = qs.filter(raw_upload__source_system=mapped_source)
 
         scope = request.query_params.get("scope")
         if scope:
