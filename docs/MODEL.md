@@ -111,7 +111,64 @@ If the record already exists (`self.pk` is truthy), the override fetches the cur
 
 ---
 
-### 4. ActivityRow
+### 4. EmissionFactor
+
+```python
+class EmissionFactor(models.Model):
+    # PK: BigAutoField (implicit)
+
+    client           = models.ForeignKey(Client, on_delete=models.CASCADE,
+                                         null=True, blank=True,
+                                         related_name="emission_factors")
+    source           = models.CharField(max_length=50)
+    year             = models.IntegerField()
+    factor_key       = models.CharField(max_length=100)
+    value            = models.DecimalField(max_digits=10, decimal_places=6)
+    unit_numerator   = models.CharField(max_length=20)
+    unit_denominator = models.CharField(max_length=20)
+    effective_from   = models.DateField()
+    effective_to     = models.DateField(null=True, blank=True)
+    created_at       = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("client", "factor_key", "effective_from")]
+        ordering = ["-effective_from"]
+```
+
+**Why it exists — versioned, auditable emission factors.**
+
+The original prototype hardcoded all emission factors as module-level constants. This has three problems:
+
+1. **No auditability** — there is no record of which factor value was used to compute a specific emission figure. An auditor cannot verify the calculation without reading source code.
+
+2. **No versioning** — DEFRA updates factors annually. Hardcoded constants cannot represent that a 2022 upload used a different factor than a 2023 upload.
+
+3. **No per-client overrides** — some clients operate under regional grids or government-mandated factors that differ from global defaults.
+
+**`client` field — global defaults vs client overrides.**  `client=None` means the factor is a global default available to all tenants. `client=<Client>` means it overrides the global default for that tenant only. Parsers resolve: client-specific first, fall back to global.
+
+**`effective_from` / `effective_to` — time-bounded validity.**  A factor with `effective_to=None` is currently active. When DEFRA publishes updated factors, a new row is inserted with a new `effective_from` — old rows are never modified. This preserves the historical record of what factor was valid at what time.
+
+**Seeded global defaults (10 factors on first setup):**
+
+| factor_key | value | source | unit |
+|---|---|---|---|
+| `diesel_litres` | 2.68 | DEFRA 2023 | kgCO2e/litre |
+| `petrol_litres` | 2.31 | DEFRA 2023 | kgCO2e/litre |
+| `lpg_kg` | 1.51 | DEFRA 2023 | kgCO2e/kg |
+| `india_grid_kwh` | 0.716 | CEA 2023 | kgCO2e/kWh |
+| `flight_economy_km` | 0.133 | DEFRA 2023 | kgCO2e/km |
+| `flight_business_km` | 0.295 | DEFRA 2023 | kgCO2e/km |
+| `flight_first_km` | 0.430 | DEFRA 2023 | kgCO2e/km |
+| `hotel_night` | 31.0 | DEFRA 2023 | kgCO2e/night |
+| `taxi_km` | 0.149 | DEFRA 2023 | kgCO2e/km |
+| `rail_km` | 0.041 | DEFRA 2023 | kgCO2e/km |
+
+**Link back to ActivityRow.**  `ActivityRow.emission_factor_ref` is a `ForeignKey(EmissionFactor, on_delete=PROTECT)`. PROTECT means an EmissionFactor row cannot be deleted while any ActivityRow references it — preserving the calculation chain. `ActivityRow.emission_factor` (DecimalField) stores the numeric value directly for fast reads without a join.
+
+---
+
+### 5. ActivityRow
 
 ```python
 class ActivityRow(models.Model):
@@ -157,9 +214,11 @@ class ActivityRow(models.Model):
     category        = models.CharField(max_length=100)           # e.g. 'stationary_combustion'
 
     # Emission estimate
-    emission_factor = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
-    co2e_kg         = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True,
-                                          help_text="kgCO2e = quantity × emission_factor")
+    emission_factor     = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+    emission_factor_ref = models.ForeignKey("EmissionFactor", on_delete=models.PROTECT,
+                                            null=True, blank=True, related_name="activity_rows")
+    co2e_kg             = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True,
+                                              help_text="kgCO2e = quantity × emission_factor")
 
     # Status & quality flags
     status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="PENDING")
@@ -227,6 +286,19 @@ The `save()` override does two things beyond the LOCKED guard:
 
 Note that `views.py` uses `queryset.update()` (bypassing `save()`) for the approve-and-lock transition itself so that the guard does not block the final lock write.
 
+**Edit tracking.**
+
+When an analyst corrects emission data before approval, the model records:
+
+- `is_edited = True` — permanent flag that this row was changed post-ingestion
+- `edited_at` — timestamp of the last edit
+- `edited_by_id` — which user made the change
+- `original_snapshot` — frozen JSON of values as they were at parse time
+
+`original_snapshot` is written once in `save()` when `self.pk` is None (first save only). Never overwritten on subsequent saves. The six tracked fields are: `quantity`, `unit`, `scope`, `category`, `emission_factor`, `co2e_kg`.
+
+An auditor can always answer: "What did the parser originally produce, and what did the analyst change it to?"
+
 **`quantity` vs original values.**  The `quantity` and `unit` fields always contain the **normalised** values (e.g. gallons converted to litres, MWh converted to kWh). The original values are preserved in `RawUpload.raw_payload` — there are no separate `quantity_original` or `unit_original` fields on the model. The original can always be recovered by following the `raw_upload` foreign key.
 
 **One RawUpload → multiple ActivityRows (billing split).**  The utility parser's `split_billing_period()` function splits a single billing-period CSV row into multiple ActivityRows when the billing window spans more than one calendar month. The consumption is allocated proportionally by days per month. For example, a bill from 2024-01-18 to 2024-02-21 (35 total days) is split: Jan gets 13/35 of the consumption, Feb gets 22/35. One `RawUpload` is created for the CSV row, and one `ActivityRow` per monthly slice.
@@ -260,7 +332,7 @@ Note that `views.py` uses `queryset.update()` (bypassing `save()`) for the appro
 
 ---
 
-### 5. AuditLog
+### 6. AuditLog
 
 ```python
 class AuditLog(models.Model):
@@ -321,9 +393,7 @@ def delete(self, *args, **kwargs):
 | `UPLOADED` | All three parsers — one entry per ActivityRow created |
 | `APPROVED` | `_approve_and_lock()` in views.py — written with `before_value`/`after_value` snapshots |
 | `REJECTED` | `RejectRowView.patch()` in views.py — written with reason in `detail` |
-| `REVIEWED` | Defined in choices but not written by any current code path |
-| `LOCKED` | Defined in choices but not written separately — `APPROVED` action covers the full transition to LOCKED |
-| `FLAGGED` | Defined in choices but not written separately — flagging is recorded via `UPLOADED` with flag details in `detail` |
+| `EDITED` | Reserved — future `PATCH /api/rows/{id}/` endpoint (see `TRADEOFFS.md`) |
 
 ---
 
@@ -349,16 +419,46 @@ Multi-tenancy in this codebase is implemented via a **query-parameter-based clie
 
 ## Source-of-Truth Chain
 
+For any emission number in the dashboard, an auditor can trace backwards to the original CSV cell values and the exact factor version used.
+
 ```
-kgCO2e value (ActivityRow.co2e_kg)
-  → ActivityRow.id
-    → ActivityRow.raw_upload_id (FK, on_delete=PROTECT)
-      → RawUpload.id
-        → RawUpload.raw_payload (JSONField, immutable)
-          → original CSV row (verbatim key-value pairs)
+ActivityRow.co2e_kg                   ← emission estimate in dashboard
+│
+├── ActivityRow.emission_factor       ← numeric value used (fast read)
+│
+├── ActivityRow.emission_factor_ref   ← FK → EmissionFactor (PROTECT)
+│     ├── source          ("DEFRA")
+│     ├── year            (2023)
+│     ├── factor_key      ("diesel_litres")
+│     ├── value           (2.680000)
+│     └── effective_from  (2023-01-01)
+│
+├── ActivityRow.raw_upload_id         ← FK → RawUpload (PROTECT)
+│     └── RawUpload.raw_payload       ← JSONField, immutable after creation
+│           └── original CSV row      ← verbatim key-value pairs
+│
+└── ActivityRow.original_snapshot     ← written once on first save(), never overwritten
+      ├── quantity        (parsed value at ingestion)
+      ├── unit            (canonical unit at ingestion)
+      ├── scope           (GHG scope at ingestion)
+      ├── category        (emission category at ingestion)
+      ├── emission_factor (factor value at ingestion)
+      └── co2e_kg         (computed emission at ingestion)
 ```
 
-This chain means that for any emission number displayed in the dashboard, an auditor can trace backwards to the exact original CSV cell values. The `PROTECT` delete constraint ensures the `RawUpload` cannot be deleted while any `ActivityRow` references it. The immutable `save()` override ensures the original data cannot be silently altered. This is the core auditability guarantee of the system.
+**Three immutability guarantees protect this chain:**
+
+1. **`RawUpload.raw_payload`** — `save()` raises `ValueError` if modified after creation. The original CSV is permanently frozen.
+
+2. **`ActivityRow.original_snapshot`** — populated on first `save()` only. Subsequent saves never touch it.
+
+3. **`AuditLog`** — `save()` raises `ValueError` if `pk` is set. `delete()` unconditionally raises `ValueError`.
+
+**Three PROTECT constraints prevent orphaning:**
+
+- `ActivityRow.raw_upload` — RawUpload cannot be deleted while ActivityRow references it.
+- `AuditLog.activity_row` — ActivityRow cannot be deleted while AuditLog references it.
+- `ActivityRow.emission_factor_ref` — EmissionFactor cannot be deleted while ActivityRow references it.
 
 ---
 
@@ -436,49 +536,28 @@ Unit normalisation, scope assignment, emission factor application, and billing-p
 
 In production, these steps would be extracted into a separate normalisation pipeline, with pure-function transforms followed by a single persistence layer.
 
-### 3. Hardcoded Emission Factors
+### 3. Hardcoded Emission Factors in Parsers
 
-All emission factors are hardcoded as module-level constants. No versioning, no per-client overrides, no effective-date ranges.
+~~All emission factors are hardcoded as module-level constants. No versioning, no per-client overrides, no effective-date ranges.~~
 
-**SAP parser (`sap_parser.py`):**
+**Partially resolved.** The `EmissionFactor` model now exists (see §4 above) and 10 global factors are seeded on `GET /api/setup/`. The `ActivityRow.emission_factor_ref` FK links each row to the versioned factor used.
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `DIESEL_LITRES` | `2.68` | kgCO2e per litre of diesel — DEFRA 2023 |
-| `PETROL_LITRES` | `2.31` | kgCO2e per litre of petrol — DEFRA 2023 |
-| `LPG_KG` | `1.51` | kgCO2e per kg of LPG — DEFRA 2023 |
+**However**, the parsers (`sap_parser.py`, `utility_parser.py`, `travel_parser.py`) still use hardcoded module-level constants for the actual calculation. They do not yet query the `EmissionFactor` table or populate `emission_factor_ref`. The database schema is ready; the parser wiring is the remaining step. See `TRADEOFFS.md` for details.
 
-**Utility parser (`utility_parser.py`):**
+**Constants still in use by parsers:**
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `INDIA_GRID_KWH` | `0.716` | kgCO2e per kWh — CEA India Grid 2023 |
-
-**Travel parser (`travel_parser.py`):**
-
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `FLIGHT_ECONOMY_KM` | `0.133` | kgCO2e per passenger-km, economy class (incl. RFI) — DEFRA 2023 |
-| `FLIGHT_BUSINESS_KM` | `0.295` | kgCO2e per passenger-km, business class — DEFRA 2023 |
-| `FLIGHT_FIRST_KM` | `0.430` | kgCO2e per passenger-km, first class — DEFRA 2023 |
-| `HOTEL_NIGHT` | `31.0` | kgCO2e per hotel room-night — DEFRA 2023 |
-| `TAXI_KM` | `0.149` | kgCO2e per km, taxi/private car — DEFRA 2023 |
-| `RAIL_KM` | `0.041` | kgCO2e per km, rail — DEFRA 2023 |
-
-A production system would have a versioned `EmissionFactor` model:
-
-```python
-class EmissionFactor(models.Model):
-    client         = models.ForeignKey(Client, on_delete=models.CASCADE)
-    source         = models.CharField(max_length=50)   # "DEFRA", "CEA", "EPA"
-    year           = models.IntegerField()              # 2023, 2024, ...
-    factor_key     = models.CharField(max_length=100)   # "diesel_litres", "india_grid_kwh"
-    value          = models.DecimalField(max_digits=10, decimal_places=6)
-    unit_numerator = models.CharField(max_length=20)    # "kgCO2e"
-    unit_denominator = models.CharField(max_length=20)  # "litre", "kWh", "km"
-    effective_from = models.DateField()
-    effective_to   = models.DateField(null=True, blank=True)
-```
+| Parser | Constant | Value |
+|--------|----------|-------|
+| SAP | `DIESEL_LITRES` | 2.68 kgCO2e/litre |
+| SAP | `PETROL_LITRES` | 2.31 kgCO2e/litre |
+| SAP | `LPG_KG` | 1.51 kgCO2e/kg |
+| Utility | `INDIA_GRID_KWH` | 0.716 kgCO2e/kWh |
+| Travel | `FLIGHT_ECONOMY_KM` | 0.133 kgCO2e/km |
+| Travel | `FLIGHT_BUSINESS_KM` | 0.295 kgCO2e/km |
+| Travel | `FLIGHT_FIRST_KM` | 0.430 kgCO2e/km |
+| Travel | `HOTEL_NIGHT` | 31.0 kgCO2e/night |
+| Travel | `TAXI_KM` | 0.149 kgCO2e/km |
+| Travel | `RAIL_KM` | 0.041 kgCO2e/km |
 
 ### 4. Plant Code Lookup
 
