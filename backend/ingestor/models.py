@@ -9,6 +9,7 @@ Hard constraints enforced here:
 """
 
 from django.db import models
+from django.utils import timezone
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +167,20 @@ class ActivityRow(models.Model):
     reviewed_by_id = models.IntegerField(null=True, blank=True)   # user pk
     reviewed_at = models.DateTimeField(null=True, blank=True)
 
+    # Edit tracking
+    is_edited         = models.BooleanField(default=False)
+    edited_by_id      = models.IntegerField(null=True, blank=True)
+    edited_at         = models.DateTimeField(null=True, blank=True)
+    original_snapshot = models.JSONField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+    # Core fields tracked for edit detection
+    _SNAPSHOT_FIELDS = ("quantity", "unit", "scope", "category", "emission_factor", "co2e_kg")
 
     def save(self, *args, **kwargs):
         # HARD CONSTRAINT 2: LOCKED rows are immutable.
@@ -182,6 +192,24 @@ class ActivityRow(models.Model):
                 raise ValueError(
                     f"ActivityRow #{self.pk} is LOCKED and cannot be modified."
                 )
+
+            # Edit detection: compare current core fields against original_snapshot
+            if self.original_snapshot:
+                for field in self._SNAPSHOT_FIELDS:
+                    current_val = getattr(self, field)
+                    original_val = self.original_snapshot.get(field)
+                    # Decimal / float comparison — compare string representations
+                    if str(current_val) != str(original_val):
+                        self.is_edited = True
+                        self.edited_at = timezone.now()
+                        break
+
+        else:
+            # First save (creation) — freeze the original values
+            self.original_snapshot = {
+                field: str(getattr(self, field)) for field in self._SNAPSHOT_FIELDS
+            }
+
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:

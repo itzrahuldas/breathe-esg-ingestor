@@ -51,6 +51,10 @@ class ActivityRowSerializer(serializers.ModelSerializer):
             "emission_factor",
             "reviewed_by_id",
             "reviewed_at",
+            "is_edited",
+            "edited_by_id",
+            "edited_at",
+            "original_snapshot",
             "created_at",
             "updated_at",
         ]
