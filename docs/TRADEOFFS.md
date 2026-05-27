@@ -1,4 +1,4 @@
-# Trade-offs and Deliberate Scope Decisions
+# Tradeoffs — Deliberate Cuts
 
 This file documents things the codebase is **aware of but deliberately did not build**,
 with the reasoning behind each decision. It is not a bug list — it is a record of
@@ -6,82 +6,123 @@ engineering judgment calls.
 
 ---
 
-## Analyst edit endpoint not built
+## 1. No role-based authentication
 
-A `PATCH /api/rows/{id}/` endpoint that lets analysts correct `quantity`, `unit`,
-`scope`, or `category` before approval was not built.
+**What it would be:**
+Analyst role (can review and approve), Admin role (can configure clients and plant codes),
+Read-only role (auditor view, no actions).
 
-**The data model fully supports it:**
+**Why not built:**
+Adds 2+ days of implementation. The assignment brief defines a single analyst persona.
+The product question of who can approve what — and whether approval requires a second
+sign-off — is a business decision that belongs to the PM, not the prototype.
 
-- `ActivityRow` has `is_edited`, `edited_by_id`, `edited_at`, `original_snapshot`
-  (populated automatically by the `save()` override — no additional migration needed)
-- `AuditLog` has `ACTION_EDITED` defined and ready
-- The audit infrastructure is complete end-to-end
+The API currently accepts `client_id` as a plain integer query parameter rather than
+resolving it from an authenticated session. Authentication (JWT/OAuth) depends on the
+identity provider chosen for production (Auth0, Cognito, Keycloak, etc.). The correct
+fix is to integrate the real IdP and resolve `client_id` from the verified JWT claim —
+at which point all the `client_id` filter calls in `views.py` remain correct; only the
+resolution source changes.
 
-**Reason not built:** The assignment prioritises the ingestion → review → approve →
-lock lifecycle. An edit endpoint adds significant validation complexity:
-
-- Should editing a `FLAGGED` row auto-clear the flag? Or should it require a
-  separate flag-clear action?
-- Should editing a `REJECTED` row reset it to `PENDING` for re-review?
-- Should editing `quantity` trigger recalculation of `co2e_kg`?
-- Who is authorised to edit — any user or only reviewers?
-
-These decisions belong to the product manager, not the prototype. The infrastructure
-is in place to wire this up quickly once the policy is defined.
+**What I would build next:**
+Django Groups with three roles, DRF permission classes per endpoint, and a simple role
+management screen in the dashboard.
 
 ---
 
-## No authentication / authorisation layer
+## 2. No versioned emission factor pipeline (partial)
 
-The API accepts `client_id` as a plain integer query parameter rather than resolving
-it from an authenticated session. Any caller who knows (or guesses) a `client_id` can
-read that tenant's data.
+**What was built:**
+`EmissionFactor` model with `source`, `year`, `effective_from`, `effective_to`, and a
+client-override mechanism. 10 global defaults seeded on `GET /api/setup/` (DEFRA 2023,
+CEA 2023). `ActivityRow.emission_factor_ref` FK exists and is PROTECT-constrained.
 
-**Reason not built:** Authentication (JWT/OAuth) is a platform-level concern that
-depends on the identity provider chosen for the production deployment (Auth0, Cognito,
-Keycloak, etc.). Adding a stub auth layer would create false confidence. The correct
-fix is to integrate the real IdP and resolve `client_id` from the verified JWT claim
-— at which point all the `client_id` filter calls in `views.py` remain correct; only
-the resolution source changes.
+**What was not built:**
+Parsers still use hardcoded module-level constants rather than looking up `EmissionFactor`
+rows at parse time. The FK `emission_factor_ref` on `ActivityRow` exists but is not
+populated during ingestion.
 
----
+**Why not completed:**
+Wiring parsers to do a DB lookup per row adds latency and requires handling the case where
+no factor exists for a given key + date combination. For a prototype where all data is from
+2023-2024 and all factors are seeded, hardcoded constants produce identical results with
+zero complexity.
 
-## Sequential integer PKs instead of UUIDs
-
-All models use Django's `BigAutoField` (auto-incrementing 64-bit integer) as the
-primary key. Sequential IDs are enumerable — a caller can iterate `/api/rows/1/`,
-`/api/rows/2/`, etc.
-
-**Reason not changed:** Migrating PKs to `UUIDField` on an existing schema with
-multiple FK relationships requires a coordinated migration across five tables. The
-risk of data loss during migration outweighs the benefit for a prototype. The correct
-fix is to apply UUIDs from the start in a production schema, or perform the migration
-with a careful data-backfill script.
+**What I would build next:**
+A `get_emission_factor(client, factor_key, activity_date)` helper that queries
+`EmissionFactor` with date range filtering, called from each parser instead of using module
+constants.
 
 ---
 
-## Hardcoded emission factors in parser constants
+## 3. No PDF bill parsing
 
-Emission factors (`DIESEL_LITRES = 2.68`, `INDIA_GRID_KWH = 0.716`, etc.) are
-module-level constants in each parser file rather than database rows.
+**What it would be:**
+OCR pipeline for utility PDF bills using `pdfplumber` or AWS Textract, with layout
+detection to extract meter ID, consumption, and billing period.
 
-**Reason accepted for now:** The `EmissionFactor` model and `emission_factor_ref` FK
-on `ActivityRow` are now in place (added in Step 2). The parsers do not yet look up
-factors from this table — they still use the constants. Wiring the parsers to the
-database requires decisions about factor selection logic (by country? by year? by
-client override priority?) that should be validated with the client before building.
+**Why not built:**
+OCR is fragile — it breaks when a utility redesigns their bill template. Every utility
+has a different PDF layout. Portal CSV is available for all major utilities and produces
+cleaner, more reliable data. Approximately 15% of utility clients only have PDF access.
+
+**What I would build next:**
+Only after mapping which specific clients need it, and only for utilities that genuinely
+have no portal CSV option.
 
 ---
 
-## Hardcoded airport coordinates (10 airports)
+## 4. Analyst edit endpoint not built
 
+**What it would be:**
+`PATCH /api/rows/{id}/` allowing an analyst to correct `quantity`, `unit`, `scope`, or
+`category` before approval.
+
+**Why not built:**
+The data model fully supports it — `ActivityRow` has `is_edited`, `edited_at`,
+`edited_by_id`, `original_snapshot`, and `emission_factor_ref`. `AuditLog` has
+`ACTION_EDITED` defined. The infrastructure is complete.
+
+Editing adds significant validation complexity: should editing a `FLAGGED` row
+auto-clear the flag? Should editing `scope` re-run the emission calculation? These
+are product decisions that belong to the PM.
+
+**What I would build next:**
+`PATCH` endpoint with before/after `AuditLog` entry (`ACTION_EDITED`), automatic
+`co2e_kg` recalculation using `EmissionFactor` lookup, and a UI diff view showing
+original vs edited values.
+
+---
+
+## 5. Sequential integer PKs instead of UUIDs
+
+**What the problem is:**
+All models use Django's `BigAutoField`. Sequential IDs are enumerable — a caller
+can iterate `/api/rows/1/`, `/api/rows/2/`, etc.
+
+**Why not changed:**
+Migrating PKs to `UUIDField` on an existing schema with multiple FK relationships
+requires a coordinated migration across five tables. The correct fix is to apply
+UUIDs from the start in a production schema.
+
+**What I would build next:**
+`UUIDField(primary_key=True, default=uuid.uuid4, editable=False)` on all models
+from day one of a production schema design.
+
+---
+
+## 6. Hardcoded airport coordinates (10 airports)
+
+**What the problem is:**
 The travel parser computes flight distances using great-circle haversine against a
-hardcoded dict of 10 IATA codes. Any booking with an unknown origin or destination
-is flagged rather than computed.
+hardcoded dict of exactly 10 IATA codes: `BOM, DEL, LHR, BLR, MAA, HYD, CCU,
+DXB, SIN, JFK`. Any booking with an unknown origin or destination is flagged.
 
-**Reason accepted:** A comprehensive airport database (e.g. OurAirports CSV with
-~9,000 airports) would be correct but introduces a data dependency and seeding step.
+**Why accepted:**
 For the prototype, 10 airports cover the demo dataset. The flagging mechanism ensures
 unknown airports are surfaced for human review rather than silently producing a wrong
 distance.
+
+**What I would build next:**
+Seed `AIRPORT_COORDS` from the OurAirports public domain database (~57 kB CSV).
+No API dependency — one-time static data load at startup.
