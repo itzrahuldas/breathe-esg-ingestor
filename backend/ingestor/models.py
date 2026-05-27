@@ -280,19 +280,18 @@ class AuditLog(models.Model):
 
     # Supported action verbs
     ACTION_UPLOADED = "UPLOADED"
-    ACTION_REVIEWED = "REVIEWED"
     ACTION_APPROVED = "APPROVED"
-    ACTION_LOCKED = "LOCKED"
-    ACTION_FLAGGED = "FLAGGED"
     ACTION_REJECTED = "REJECTED"
+    # EDITED: Reserved for future PATCH /api/rows/{id}/ endpoint.
+    # Infrastructure is in place (is_edited, edited_at, original_snapshot
+    # on ActivityRow). Endpoint not built — see TRADEOFFS.md.
+    ACTION_EDITED = "EDITED"
 
     ACTION_CHOICES = [
         (ACTION_UPLOADED, "Uploaded"),
-        (ACTION_REVIEWED, "Reviewed"),
         (ACTION_APPROVED, "Approved"),
-        (ACTION_LOCKED, "Locked"),
-        (ACTION_FLAGGED, "Flagged"),
         (ACTION_REJECTED, "Rejected"),
+        (ACTION_EDITED,   "Edited"),
     ]
 
     # Multi-tenancy

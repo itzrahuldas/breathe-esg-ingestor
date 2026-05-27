@@ -267,19 +267,16 @@ class AuditLog(models.Model):
     # PK: BigAutoField (implicit)
 
     ACTION_UPLOADED = "UPLOADED"
-    ACTION_REVIEWED = "REVIEWED"
     ACTION_APPROVED = "APPROVED"
-    ACTION_LOCKED   = "LOCKED"
-    ACTION_FLAGGED  = "FLAGGED"
     ACTION_REJECTED = "REJECTED"
+    # EDITED: Reserved for future PATCH /api/rows/{id}/ endpoint.
+    ACTION_EDITED   = "EDITED"
 
     ACTION_CHOICES = [
         ("UPLOADED", "Uploaded"),
-        ("REVIEWED", "Reviewed"),
         ("APPROVED", "Approved"),
-        ("LOCKED",   "Locked"),
-        ("FLAGGED",  "Flagged"),
         ("REJECTED", "Rejected"),
+        ("EDITED",   "Edited"),
     ]
 
     # Multi-tenancy
@@ -393,26 +390,24 @@ Original: RawUpload.raw_payload = {"MEINS": "GAL", "MENGE": "132.5", ...}
 
 ## Audit Trail
 
-The AuditLog records every state change in the lifecycle of an ActivityRow. Here is when each action is written:
+The AuditLog records every state change in the lifecycle of an ActivityRow.
 
-### `UPLOADED`
-**Written by:** All three parsers (`parse_sap_file`, `parse_utility_file`, `parse_travel_file`)
-**When:** Immediately after creating each `ActivityRow`. One `AuditLog` entry per `ActivityRow` — if billing-split produces 3 slices, 3 audit entries are created.
-**Content:** `detail` contains parser-specific metadata (raw_upload_id, plant/meter/booking info, quantities). If the row was flagged, flag reasons are appended.
+### Actions written by current code
 
-### `APPROVED`
-**Written by:** `_approve_and_lock()` helper in `views.py`, called from `ApproveRowView.patch()` and `BulkApproveView.post()`
-**When:** When an analyst approves a row. The row transitions directly to `LOCKED` status (no intermediate `APPROVED` state is persisted).
-**Content:** `before_value = {"status": <old_status>}`, `after_value = {"status": "LOCKED"}`, `detail = "Row approved and locked."`
+| Action | Written by | When |
+|--------|------------|------|
+| `UPLOADED` | All three parsers (`parse_sap_file`, `parse_utility_file`, `parse_travel_file`) | On creation of each `ActivityRow` — one entry per row. If billing-split produces 3 slices, 3 entries are created. If the row was flagged, flag reasons are appended to `detail`. |
+| `APPROVED` | `_approve_and_lock()` helper in `views.py`, called from `ApproveRowView` and `BulkApproveView` | When an analyst approves a row. The row atomically becomes `LOCKED`. `before_value = {"status": <old>}`, `after_value = {"status": "LOCKED"}`. |
+| `REJECTED` | `RejectRowView.patch()` in `views.py` | When an analyst rejects a row with a mandatory reason. `before_value = {"status": <old>}`, `after_value = {"status": "REJECTED"}`, `detail = <reason>`. |
+| `EDITED` | **Reserved** | Future `PATCH /api/rows/{id}/` endpoint. Infrastructure fully in place (`is_edited`, `edited_at`, `original_snapshot` on `ActivityRow`). Endpoint not built — see `TRADEOFFS.md`. |
 
-### `REJECTED`
-**Written by:** `RejectRowView.patch()` in `views.py`
-**When:** When an analyst rejects a row with a mandatory reason.
-**Content:** `before_value = {"status": <old_status>}`, `after_value = {"status": "REJECTED"}`, `detail = <analyst's rejection reason>`
+### Actions deliberately removed
 
-### `REVIEWED`, `LOCKED`, `FLAGGED`
-**Defined in:** `AuditLog.ACTION_CHOICES`
-**Written by:** No current code path writes these action values. They are reserved for future use. Flagging is recorded via the `UPLOADED` action with flag details in the `detail` field.
+| Action | Reason removed |
+|--------|----------------|
+| `REVIEWED` | No intermediate review state in the current workflow — approval goes straight from `PENDING` to `LOCKED` in one atomic step. |
+| `LOCKED` | Not a separate event — locking happens inside the same transaction as `APPROVED`. A separate `LOCKED` entry would be redundant noise. |
+| `FLAGGED` | Flagging happens at parse time and is recorded inside the `UPLOADED` entry's `detail` field. A separate `FLAGGED` action was never written by any code path. |
 
 ---
 
