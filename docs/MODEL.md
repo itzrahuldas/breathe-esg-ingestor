@@ -339,14 +339,14 @@ Multi-tenancy in this codebase is implemented via a **query-parameter-based clie
 | Endpoint | Method | Client Resolution |
 |----------|--------|-------------------|
 | `POST /api/upload/` | Form field `client_id` in request body | `Client.objects.get_or_create(pk=client_id, defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"})` — **auto-creates** the client if it doesn't exist |
-| `GET /api/rows/` | Query param `?client_id=` | `qs.filter(client_id=client_id)` — if not provided, **returns all rows across all clients** (no 400 error) |
+| `GET /api/rows/` | Query param `?client_id=` (required) | Returns `400 {"error": "client_id query parameter is required."}` if missing — consistent with SummaryView and AuditLogView |
 | `GET /api/summary/` | Query param `?client_id=` (required) | Returns `400 {"error": "client_id query parameter is required."}` if missing |
 | `GET /api/audit-log/` | Query param `?client_id=` (required) | Returns `400 {"error": "client_id query parameter is required."}` if missing |
 | `PATCH /api/rows/{id}/approve/` | Resolved from the ActivityRow itself (`row.client`) | N/A — operates on a specific row |
 | `PATCH /api/rows/{id}/reject/` | Resolved from the ActivityRow itself (`row.client`) | N/A — operates on a specific row |
 | `DELETE /api/delete-all/` | Query param `?client_id=` (defaults to `1`) | Returns `404` if client not found |
 
-**Key behaviour:** The `RowListView` does **not** require `client_id` — omitting it silently returns rows from all clients. The `SummaryView` and `AuditLogView` **do** require it, returning HTTP 400 if missing.
+**~~Multi-tenancy leak in RowListView~~ — FIXED.**  Previously `RowListView` returned all rows across all clients when `client_id` was omitted. All list endpoints now enforce `client_id` and return HTTP 400 if missing. The only endpoints that do not require `client_id` are `approve`/`reject`/`bulk-approve` — these resolve the client from the row's own FK, so isolation is maintained.
 
 ---
 

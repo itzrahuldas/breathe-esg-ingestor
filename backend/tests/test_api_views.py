@@ -235,6 +235,15 @@ class TestRowListView(ApiTestBase):
         self.assertIn("count", resp.json())
         self.assertIn("next", resp.json())
 
+    def test_rows_without_client_id_returns_400(self):
+        """
+        GET /api/rows/ without client_id must return 400.
+        This test covers the multi-tenancy isolation fix.
+        """
+        resp = self.api.get("/api/rows/")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("client_id", resp.json().get("error", ""))
+
 
 # ===========================================================================
 # PATCH /api/rows/{id}/approve/

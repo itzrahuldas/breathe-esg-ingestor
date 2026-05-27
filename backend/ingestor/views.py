@@ -196,14 +196,14 @@ class RowListView(APIView):
     """
     Return a paginated, filtered list of ActivityRow objects.
 
-    Query params (all optional):
+    Query params:
+      client_id    — integer PK (REQUIRED — returns 400 if missing)
       source_type  — 'SAP' | 'UTILITY' | 'TRAVEL'
       scope        — 1 | 2 | 3
       status       — PENDING | FLAGGED | APPROVED | LOCKED | REJECTED
       is_flagged   — 'true' | 'false'
       date_from    — YYYY-MM-DD (filters on document_date)
       date_to      — YYYY-MM-DD (filters on document_date)
-      client_id    — integer PK
     """
 
     def get(self, request: Request) -> Response:
@@ -211,8 +211,16 @@ class RowListView(APIView):
 
         # --- Filters ---
         client_id = request.query_params.get("client_id")
-        if client_id:
-            qs = qs.filter(client_id=client_id)
+
+        # SECURITY: client_id is mandatory.
+        # Never return rows across all tenants.
+        if not client_id:
+            return Response(
+                {"error": "client_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = qs.filter(client_id=client_id)
 
         SOURCE_FILTER_MAP = {
             "SAP":     RawUpload.SOURCE_SAP,
