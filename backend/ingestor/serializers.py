@@ -49,6 +49,8 @@ class ActivityRowSerializer(serializers.ModelSerializer):
             "plant_code",
             "material_number",
             "emission_factor",
+            "emission_factor_ref",
+            "emission_factor_ref_id",
             "reviewed_by_id",
             "reviewed_at",
             "is_edited",

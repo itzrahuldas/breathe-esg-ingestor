@@ -97,6 +97,47 @@ class RawUpload(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Versioned Emission Factors
+# ---------------------------------------------------------------------------
+
+class EmissionFactor(models.Model):
+    """
+    Versioned, source-attributed emission factor lookup.
+
+    client=None  → global default (applies to all tenants).
+    client=<obj> → client-specific override that takes precedence.
+    """
+
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="emission_factors",
+        help_text="Null = global default. Set = client-specific override."
+    )
+    source = models.CharField(max_length=50)
+    year = models.IntegerField()
+    factor_key = models.CharField(max_length=100)
+    value = models.DecimalField(max_digits=10, decimal_places=6)
+    unit_numerator = models.CharField(max_length=20)
+    unit_denominator = models.CharField(max_length=20)
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("client", "factor_key", "effective_from")]
+        ordering = ["-effective_from"]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.factor_key} | {self.source} {self.year} | "
+            f"{self.value} kgCO2e/{self.unit_denominator}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Activity Row (the normalized, auditable record)
 # ---------------------------------------------------------------------------
 
@@ -152,6 +193,14 @@ class ActivityRow(models.Model):
     # Emission estimate (rule-based, pre-computed)
     emission_factor = models.DecimalField(
         max_digits=10, decimal_places=4, null=True, blank=True
+    )
+    emission_factor_ref = models.ForeignKey(
+        "EmissionFactor",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="activity_rows",
+        help_text="Versioned EmissionFactor used to compute co2e_kg."
     )
     co2e_kg = models.DecimalField(
         max_digits=18, decimal_places=4, null=True, blank=True,

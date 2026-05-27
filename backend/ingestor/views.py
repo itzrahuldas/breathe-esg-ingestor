@@ -500,6 +500,91 @@ _DEMO_PLANT_CODES = [
 ]
 
 
+def seed_emission_factors() -> int:
+    """
+    Idempotently seed all global emission factors into the EmissionFactor table.
+    Returns the number of rows actually created (0 if already seeded).
+    """
+    from datetime import date
+    from .models import EmissionFactor
+
+    factors = [
+        {
+            "factor_key": "diesel_litres", "value": "2.68",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "litre",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "petrol_litres", "value": "2.31",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "litre",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "lpg_kg", "value": "1.51",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "kg",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "india_grid_kwh", "value": "0.716",
+            "source": "CEA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "kWh",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "flight_economy_km", "value": "0.133",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "km",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "flight_business_km", "value": "0.295",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "km",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "flight_first_km", "value": "0.430",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "km",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "hotel_night", "value": "31.0",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "night",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "taxi_km", "value": "0.149",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "km",
+            "effective_from": date(2023, 1, 1),
+        },
+        {
+            "factor_key": "rail_km", "value": "0.041",
+            "source": "DEFRA", "year": 2023,
+            "unit_numerator": "kgCO2e", "unit_denominator": "km",
+            "effective_from": date(2023, 1, 1),
+        },
+    ]
+
+    created_count = 0
+    for f in factors:
+        _, created = EmissionFactor.objects.get_or_create(
+            client=None,
+            factor_key=f["factor_key"],
+            effective_from=f["effective_from"],
+            defaults=f,
+        )
+        if created:
+            created_count += 1
+    return created_count
+
+
+
 class SetupView(APIView):
     """
     Idempotent bootstrap endpoint. Creates the demo Client (pk=1) and
@@ -525,11 +610,14 @@ class SetupView(APIView):
             if created:
                 pc_created += 1
 
+        ef_created = seed_emission_factors()
+
         return Response({
             "client_id": client.pk,
             "client_name": client.name,
             "client_created": client_created,
             "plant_codes_created": pc_created,
+            "emission_factors_created": ef_created,
             "message": "Demo client ready. You can now upload CSV files.",
         }, status=status.HTTP_200_OK)
 
