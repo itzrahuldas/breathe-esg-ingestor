@@ -13,6 +13,12 @@ Endpoints implemented:
   GET    /api/audit-log/
 """
 
+# RENDER DEPLOY NOTE:
+# After pushing this fix, go to Render Shell and run:
+# python manage.py migrate
+# python manage.py shell -c "from ingestor.views import seed_emission_factors; seed_emission_factors()"
+
+
 import io
 import uuid
 import logging
@@ -118,74 +124,88 @@ class UploadView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request: Request) -> Response:
-        source_type = (request.data.get("source_type") or "").strip().upper()
-        client_id_raw = request.data.get("client_id", "")
-        uploaded_file = request.FILES.get("file")
+        try:
+            source_type = (request.data.get("source_type") or "").strip().upper()
+            client_id_raw = request.data.get("client_id", "")
+            uploaded_file = request.FILES.get("file")
 
-        # --- Validation ---
-        if not uploaded_file:
-            return Response(
-                {"error": "No file provided. Include a 'file' field."},
-                status=status.HTTP_400_BAD_REQUEST,
+            # --- Validation ---
+            if not uploaded_file:
+                return Response(
+                    {"error": "No file provided. Include a 'file' field."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if source_type not in _SOURCE_TYPE_MAP:
+                return Response(
+                    {
+                        "error": (
+                            f"Invalid source_type '{source_type}'. "
+                            "Must be one of: SAP, UTILITY, TRAVEL."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                client_id = int(client_id_raw)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": f"client_id must be an integer, got '{client_id_raw}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Auto-create the demo client if it doesn't exist yet
+            # (handles cold-start on Render before seed_mock_data has run)
+            client, _ = Client.objects.get_or_create(
+                pk=client_id,
+                defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"},
             )
 
-        if source_type not in _SOURCE_TYPE_MAP:
+            # --- Parse ---
+            _, parser_fn = _SOURCE_TYPE_MAP[source_type]
+
+            try:
+                text_file = io.TextIOWrapper(uploaded_file, encoding="utf-8-sig")
+                result = parser_fn(text_file, client.pk, _actor_id(request))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("CSV parse failed for source_type=%s", source_type)
+                return Response(
+                    {"error": f"CSV parse failed: {exc}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Normalise result: sap_parser returns list[int], others return list[dict]
+            if result and isinstance(result[0], dict):
+                row_ids = [r["activity_row_id"] for r in result]
+            else:
+                row_ids = list(result)
+
+            flagged_count = ActivityRow.objects.filter(
+                pk__in=row_ids, is_flagged=True
+            ).count()
+
             return Response(
                 {
-                    "error": (
-                        f"Invalid source_type '{source_type}'. "
-                        "Must be one of: SAP, UTILITY, TRAVEL."
-                    )
+                    "upload_id": str(uuid.uuid4()),  # logical batch ID for this upload
+                    "rows_created": len(row_ids),
+                    "rows_flagged": flagged_count,
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_200_OK,
             )
-
-        try:
-            client_id = int(client_id_raw)
-        except (TypeError, ValueError):
+        except Exception as e:
+            import traceback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Upload failed: {str(e)}")
+            logger.error(traceback.format_exc())
             return Response(
-                {"error": f"client_id must be an integer, got '{client_id_raw}'."},
-                status=status.HTTP_400_BAD_REQUEST,
+                {
+                    "error": "Upload failed.",
+                    "detail": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-        # Auto-create the demo client if it doesn't exist yet
-        # (handles cold-start on Render before seed_mock_data has run)
-        client, _ = Client.objects.get_or_create(
-            pk=client_id,
-            defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"},
-        )
-
-        # --- Parse ---
-        _, parser_fn = _SOURCE_TYPE_MAP[source_type]
-
-        try:
-            text_file = io.TextIOWrapper(uploaded_file, encoding="utf-8-sig")
-            result = parser_fn(text_file, client.pk, _actor_id(request))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("CSV parse failed for source_type=%s", source_type)
-            return Response(
-                {"error": f"CSV parse failed: {exc}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Normalise result: sap_parser returns list[int], others return list[dict]
-        if result and isinstance(result[0], dict):
-            row_ids = [r["activity_row_id"] for r in result]
-        else:
-            row_ids = list(result)
-
-        flagged_count = ActivityRow.objects.filter(
-            pk__in=row_ids, is_flagged=True
-        ).count()
-
-        return Response(
-            {
-                "upload_id": str(uuid.uuid4()),  # logical batch ID for this upload
-                "rows_created": len(row_ids),
-                "rows_flagged": flagged_count,
-            },
-            status=status.HTTP_200_OK,
-        )
 
 
 # ===========================================================================
