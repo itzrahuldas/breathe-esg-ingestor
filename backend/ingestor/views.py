@@ -797,6 +797,40 @@ class SeedStatusView(APIView):
         })
 
 
+class FixDuplicateClientsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from ingestor.models import Client, ActivityRow
+
+        clients = Client.objects.filter(
+            slug="breathe-demo-corp"
+        ).order_by('pk')
+
+        if clients.count() <= 1:
+            return Response({
+                "status": "ok",
+                "message": "No duplicate clients found.",
+                "clients": list(clients.values('pk', 'slug'))
+            })
+
+        # Keep client with most data
+        best = max(
+            clients,
+            key=lambda c: ActivityRow.objects.filter(client=c).count()
+        )
+        to_delete = clients.exclude(pk=best.pk)
+        deleted_pks = list(to_delete.values_list('pk', flat=True))
+        to_delete.delete()
+
+        return Response({
+            "status": "fixed",
+            "kept_pk": best.pk,
+            "deleted_pks": deleted_pks,
+            "message": f"Kept pk={best.pk}, deleted {deleted_pks}"
+        })
+
+
 class DeleteAllDataView(APIView):
     """
     DELETE /api/delete-all/?client_id=1

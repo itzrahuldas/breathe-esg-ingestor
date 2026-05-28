@@ -12,6 +12,7 @@ from ingestor.views import (
     ApproveRowView,
     BulkApproveView,
     DeleteAllDataView,
+    FixDuplicateClientsView,
     RejectRowView,
     RowListView,
     SetupView,
@@ -85,6 +86,9 @@ urlpatterns = [
 
     # Danger zone — wipe all client data and reseed demo dataset
     path("api/delete-all/", DeleteAllDataView.as_view(), name="api-delete-all"),
+
+    # Fix duplicate clients issue (if any)
+    path("api/fix-clients/", FixDuplicateClientsView.as_view(), name="api-fix-clients"),
 
     # Upload
     path("api/upload/", UploadView.as_view(), name="api-upload"),
