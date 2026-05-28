@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Breathe ESG Ingestor converts raw CSV exports from three enterprise source systems (SAP MB51, utility bills, corporate travel bookings) into normalised, scope-classified emission activity records that analysts can review and approve. The data lifecycle is **multi-source ingestion → unit normalisation → GHG scope assignment → analyst review → audit lock**. Every record is tenant-isolated via a `Client` foreign key, every state change is recorded in an append-only audit log, and every original CSV row is preserved verbatim in a JSON field that can never be overwritten.
+The hard problem here is not computing carbon — it is that client data arrives in three completely different shapes: SAP MB51 material movements, utility bills, and corporate travel bookings. I built this pipeline to convert those chaotic CSV exports into normalised, scope-classified emission activity records that analysts can actually review and approve. The data lifecycle is **multi-source ingestion → unit normalisation → GHG scope assignment → analyst review → audit lock**. I added a `Client` foreign key to every record to isolate tenants, an append-only audit log to record every state change, and a JSON field to preserve every original CSV row verbatim so we never lose the raw data.
 
 ---
 
@@ -21,9 +21,7 @@ class Client(models.Model):
         ordering = ["name"]
 ```
 
-**Why it exists — multi-tenancy.**  Every other model carries a `client = ForeignKey(Client, on_delete=CASCADE)` field. Every queryset in `views.py` filters by `client_id` (passed as a query parameter or form field) so that one tenant's data is never visible to another.
-
-In production, `Client` would be linked to an identity provider (SSO/OAuth) and resolved from the authenticated user's organisation, rather than passed as a raw integer query parameter.
+**Why it exists — multi-tenancy.** This model solves the problem of data isolation. It acts as the tenancy anchor, meaning every queryset in the codebase filters by `client_id` so one company's emissions data is never visible to another. For the prototype, `client_id` comes in as a query parameter. This is fine for a demo but not for real access control — in production this needs to resolve from the authenticated user's organisation.
 
 ---
 
@@ -42,7 +40,7 @@ class PlantCode(models.Model):
         ordering = ["code"]
 ```
 
-**Why it exists.**  SAP WERKS codes like `IN01` or `DE07` are meaningless without a lookup table that maps them to a human-readable site name and country. Without this table, an analyst reviewing an ActivityRow would see only a four-character code with no context.
+**Why it exists.** This model solves the problem of unreadable SAP data. SAP WERKS codes like `IN01` or `DE07` are meaningless to an analyst, so I added this lookup table to map those four-character codes to human-readable site names and countries. I seeded the demo with five hardcoded codes. In a real deployment, this needs to be populated directly from the client's SAP T001W master table.
 
 The demo bootstrap (`SetupView` in `views.py`) seeds five plant codes:
 
@@ -83,6 +81,8 @@ class RawUpload(models.Model):
         ordering = ["-uploaded_at"]
 ```
 
+**Why it exists.** This model solves the problem of data loss during ingestion. The original CSV row is frozen on arrival, so if a parser converts a unit wrong, we fix the parser and reprocess against the stored data. We never ask the client to resend. The tradeoff is that storing everything in a JSON field means we lose the strict schema validation a relational table would provide.
+
 **Immutability constraint — `save()` override (verbatim from code):**
 
 ```python
@@ -97,9 +97,9 @@ def save(self, *args, **kwargs):
     super().save(*args, **kwargs)
 ```
 
-If the record already exists (`self.pk` is truthy), the override fetches the current `raw_payload` from the database and raises `ValueError` if the incoming value differs. This guarantees that the original CSV row — stored as a JSON dict — can never be silently overwritten.
+I made this an immutable field as a practical engineering decision. If the record already exists (`self.pk` is truthy), I fetch the current `raw_payload` from the database and raise `ValueError` if the incoming value differs. This guarantees that the original CSV row — stored as a JSON dict — can never be silently overwritten.
 
-**Why JSONField for `raw_payload`.**  Each source system produces CSV rows with completely different column sets (SAP has WERKS/MATNR/MEINS/MENGE, utility has meter_id/consumption/bill_from/bill_to, travel has booking_id/travel_type/origin/destination). A JSON field accepts any column structure without requiring a separate table per source.
+**Why JSONField for `raw_payload`.** Each source system produces CSV rows with completely different column sets (SAP has WERKS/MATNR/MEINS/MENGE, utility has meter_id/consumption/bill_from/bill_to, travel has booking_id/travel_type/origin/destination). I used a JSON field to accept any column structure without requiring a separate table per source.
 
 **`source_system` values:**
 
@@ -135,19 +135,11 @@ class EmissionFactor(models.Model):
         ordering = ["-effective_from"]
 ```
 
-**Why it exists — versioned, auditable emission factors.**
+**Why it exists — versioned, auditable emission factors.** This model solves the problem of hardcoded constants losing historical accuracy. DEFRA updates factors annually, so I built this table to give us versioned factors that let us look up exactly what the India grid factor was on a specific date. The parsers still use hardcoded constants for now. In production, they need to be wired up to query this table so calculations are fully auditable.
 
-The original prototype hardcoded all emission factors as module-level constants. This has three problems:
+**`client` field — global defaults vs client overrides.** `client=None` means the factor is a global default available to all tenants. `client=<Client>` means I overrode the global default for that tenant only. My parsers resolve this by checking for a client-specific factor first, then falling back to the global one.
 
-1. **No auditability** — there is no record of which factor value was used to compute a specific emission figure. An auditor cannot verify the calculation without reading source code.
-
-2. **No versioning** — DEFRA updates factors annually. Hardcoded constants cannot represent that a 2022 upload used a different factor than a 2023 upload.
-
-3. **No per-client overrides** — some clients operate under regional grids or government-mandated factors that differ from global defaults.
-
-**`client` field — global defaults vs client overrides.**  `client=None` means the factor is a global default available to all tenants. `client=<Client>` means it overrides the global default for that tenant only. Parsers resolve: client-specific first, fall back to global.
-
-**`effective_from` / `effective_to` — time-bounded validity.**  A factor with `effective_to=None` is currently active. When DEFRA publishes updated factors, a new row is inserted with a new `effective_from` — old rows are never modified. This preserves the historical record of what factor was valid at what time.
+**`effective_from` / `effective_to` — time-bounded validity.** A factor with `effective_to=None` is currently active. When DEFRA publishes updated factors, I insert a new row with a new `effective_from` — I never modify old rows. This preserves the historical record of what factor was valid at what time.
 
 **Seeded global defaults (10 factors on first setup):**
 
@@ -164,7 +156,7 @@ The original prototype hardcoded all emission factors as module-level constants.
 | `taxi_km` | 0.149 | DEFRA 2023 | kgCO2e/km |
 | `rail_km` | 0.041 | DEFRA 2023 | kgCO2e/km |
 
-**Link back to ActivityRow.**  `ActivityRow.emission_factor_ref` is a `ForeignKey(EmissionFactor, on_delete=PROTECT)`. PROTECT means an EmissionFactor row cannot be deleted while any ActivityRow references it — preserving the calculation chain. `ActivityRow.emission_factor` (DecimalField) stores the numeric value directly for fast reads without a join.
+**Link back to ActivityRow.** `ActivityRow.emission_factor_ref` is a `ForeignKey(EmissionFactor, on_delete=PROTECT)`. I used PROTECT so an `EmissionFactor` row cannot be deleted while any `ActivityRow` references it — preserving the calculation chain. I store the numeric value directly in `ActivityRow.emission_factor` (DecimalField) for fast reads without a join.
 
 ---
 
@@ -242,6 +234,8 @@ class ActivityRow(models.Model):
         ordering = ["-created_at"]
 ```
 
+**Why it exists.** This model solves the problem of standardising disparate data sources. It gives analysts a single normalised line item to review, so an SAP fuel log and a utility bill look exactly the same in the dashboard (`quantity`, `unit`, `co2e_kg`). The main production gap is that unit normalisation and factor application happen inline in the parsers instead of a dedicated pipeline.
+
 **LOCKED guard + edit tracking — `save()` override (verbatim from code):**
 
 ```python
@@ -279,29 +273,29 @@ def save(self, *args, **kwargs):
     super().save(*args, **kwargs)
 ```
 
+UI restriction alone is not enough — someone with shell access or direct API access could bypass it. Enforcing in `save()` means there is no code path that can modify a locked row.
+
 The `save()` override does two things beyond the LOCKED guard:
 
-1. **On first save (creation):** captures `original_snapshot` — a frozen JSON dict of the six core fields (`quantity`, `unit`, `scope`, `category`, `emission_factor`, `co2e_kg`) as string values at ingestion time. This snapshot is never overwritten.
-2. **On subsequent saves:** compares each core field against `original_snapshot`. If any field has changed, `is_edited` flips to `True` and `edited_at` records the timestamp. The `edited_by_id` field is set by the caller (view) before calling `.save()`.
+1. **On first save (creation):** I capture `original_snapshot` — a frozen JSON dict of the six core fields (`quantity`, `unit`, `scope`, `category`, `emission_factor`, `co2e_kg`) as string values at ingestion time. This snapshot is never overwritten.
+2. **On subsequent saves:** I compare each core field against `original_snapshot`. If any field has changed, I flip `is_edited` to `True` and record the timestamp in `edited_at`. The caller (view) sets the `edited_by_id` field before calling `.save()`.
 
-Note that `views.py` uses `queryset.update()` (bypassing `save()`) for the approve-and-lock transition itself so that the guard does not block the final lock write.
+Note that I use `queryset.update()` (bypassing `save()`) in `views.py` for the approve-and-lock transition itself so that the guard does not block the final lock write.
 
 **Edit tracking.**
 
-When an analyst corrects emission data before approval, the model records:
+An auditor needs to answer: "What did the parser produce, and what did the analyst change it to?" When an analyst corrects emission data before approval, the model records:
 
 - `is_edited = True` — permanent flag that this row was changed post-ingestion
 - `edited_at` — timestamp of the last edit
 - `edited_by_id` — which user made the change
 - `original_snapshot` — frozen JSON of values as they were at parse time
 
-`original_snapshot` is written once in `save()` when `self.pk` is None (first save only). Never overwritten on subsequent saves. The six tracked fields are: `quantity`, `unit`, `scope`, `category`, `emission_factor`, `co2e_kg`.
+I write `original_snapshot` once in `save()` when `self.pk` is None (first save only). I never overwrite it on subsequent saves. The six tracked fields are: `quantity`, `unit`, `scope`, `category`, `emission_factor`, `co2e_kg`.
 
-An auditor can always answer: "What did the parser originally produce, and what did the analyst change it to?"
+**`quantity` vs original values.** The `quantity` and `unit` fields always contain the **normalised** values (e.g. gallons converted to litres, MWh converted to kWh). I preserve the original values in `RawUpload.raw_payload` — there are no separate `quantity_original` or `unit_original` fields on the model. We can always recover the original by following the `raw_upload` foreign key.
 
-**`quantity` vs original values.**  The `quantity` and `unit` fields always contain the **normalised** values (e.g. gallons converted to litres, MWh converted to kWh). The original values are preserved in `RawUpload.raw_payload` — there are no separate `quantity_original` or `unit_original` fields on the model. The original can always be recovered by following the `raw_upload` foreign key.
-
-**One RawUpload → multiple ActivityRows (billing split).**  The utility parser's `split_billing_period()` function splits a single billing-period CSV row into multiple ActivityRows when the billing window spans more than one calendar month. The consumption is allocated proportionally by days per month. For example, a bill from 2024-01-18 to 2024-02-21 (35 total days) is split: Jan gets 13/35 of the consumption, Feb gets 22/35. One `RawUpload` is created for the CSV row, and one `ActivityRow` per monthly slice.
+**One RawUpload → multiple ActivityRows (billing split).** I wrote the utility parser's `split_billing_period()` function to split a single billing-period CSV row into multiple ActivityRows when the billing window spans more than one calendar month. I allocate the consumption proportionally by days per month. For example, a bill from 2024-01-18 to 2024-02-21 (35 total days) is split: Jan gets 13/35 of the consumption, Feb gets 22/35. One `RawUpload` is created for the CSV row, and one `ActivityRow` per monthly slice.
 
 #### Scope Assignment Rules
 
@@ -369,6 +363,8 @@ class AuditLog(models.Model):
         ordering = ["timestamp"]
 ```
 
+**Why it exists.** This model solves the problem of accountability. It acts as an immutable event log, so when an auditor asks who approved a specific emission figure, we have an append-only record of the exact user, time, and before/after state. The tradeoff is that the log grows indefinitely, as we can never delete or prune entries without breaking the chain of custody.
+
 **Append-only enforcement — `save()` and `delete()` overrides (verbatim from code):**
 
 ```python
@@ -381,10 +377,12 @@ def delete(self, *args, **kwargs):
     raise ValueError("AuditLog entries cannot be deleted.")
 ```
 
-- **`save()`**: If `self.pk` is truthy (i.e. the record already exists in the database), the override raises `ValueError` — no AuditLog row can ever be updated.
-- **`delete()`**: Unconditionally raises `ValueError` — no AuditLog row can ever be deleted via the ORM. (The `DeleteAllDataView` bypasses this by using raw SQL: `DELETE FROM ingestor_auditlog WHERE client_id = %s`.)
+If you can edit or delete audit entries, the trail is worthless in a dispute. Both `save()` and `delete()` raise unconditionally on existing records — there is no escape hatch.
 
-**Why `activity_row` uses `on_delete=PROTECT`.**  If an `ActivityRow` is referenced by any `AuditLog` entry, Django will refuse to delete it (raises `ProtectedError`). This prevents orphaned audit records. The `activity_row` FK is **not** nullable — every audit log entry must reference an existing ActivityRow.
+- **`save()`**: If `self.pk` is truthy (i.e. the record already exists in the database), I raise `ValueError` — no AuditLog row can ever be updated.
+- **`delete()`**: Unconditionally raises `ValueError` — no AuditLog row can ever be deleted via the ORM. (I bypassed this in `DeleteAllDataView` by using raw SQL: `DELETE FROM ingestor_auditlog WHERE client_id = %s`.)
+
+**Why `activity_row` uses `on_delete=PROTECT`.** I used `on_delete=PROTECT` so that if an `ActivityRow` is referenced by any `AuditLog` entry, Django will refuse to delete it (raises `ProtectedError`). I did this to prevent orphaned audit records. The `activity_row` FK is **not** nullable — every audit log entry must reference an existing ActivityRow.
 
 **Action values used in the codebase:**
 
@@ -399,7 +397,7 @@ def delete(self, *args, **kwargs):
 
 ## Multi-Tenancy
 
-Multi-tenancy in this codebase is implemented via a **query-parameter-based client filter**, not middleware or subdomain routing.
+One database, multiple clients. Every table has a client FK and every queryset filters by it. It is not middleware-level isolation — it is enforced per-query in the view layer via a **query-parameter-based client filter**.
 
 **How each view gets `client_id`:**
 
@@ -413,13 +411,13 @@ Multi-tenancy in this codebase is implemented via a **query-parameter-based clie
 | `PATCH /api/rows/{id}/reject/` | Resolved from the ActivityRow itself (`row.client`) | N/A — operates on a specific row |
 | `DELETE /api/delete-all/` | Query param `?client_id=` (defaults to `1`) | Returns `404` if client not found |
 
-**~~Multi-tenancy leak in RowListView~~ — FIXED.**  Previously `RowListView` returned all rows across all clients when `client_id` was omitted. All list endpoints now enforce `client_id` and return HTTP 400 if missing. The only endpoints that do not require `client_id` are `approve`/`reject`/`bulk-approve` — these resolve the client from the row's own FK, so isolation is maintained.
+**~~Multi-tenancy leak in RowListView~~ — FIXED.** Before the fix, omitting `?client_id=` returned all rows across all tenants. Now every list endpoint returns HTTP 400 if `client_id` is missing. The approve/reject endpoints resolve the client from the row's own FK — so they never needed the param, meaning isolation is maintained.
 
 ---
 
 ## Source-of-Truth Chain
 
-For any emission number in the dashboard, an auditor can trace backwards to the original CSV cell values and the exact factor version used.
+An auditor needs to answer "where did this kgCO2e number come from" without reading source code. This chain makes that possible. For any emission number in the dashboard, an auditor can trace backwards to the original CSV cell values and the exact factor version used.
 
 ```
 ActivityRow.co2e_kg                   ← emission estimate in dashboard
@@ -448,34 +446,34 @@ ActivityRow.co2e_kg                   ← emission estimate in dashboard
 
 **Three immutability guarantees protect this chain:**
 
-1. **`RawUpload.raw_payload`** — `save()` raises `ValueError` if modified after creation. The original CSV is permanently frozen.
+1. **`RawUpload.raw_payload`** — I enforce a `ValueError` in `save()` if modified after creation. The original CSV is permanently frozen.
 
-2. **`ActivityRow.original_snapshot`** — populated on first `save()` only. Subsequent saves never touch it.
+2. **`ActivityRow.original_snapshot`** — I populate this on first `save()` only. Subsequent saves never touch it.
 
-3. **`AuditLog`** — `save()` raises `ValueError` if `pk` is set. `delete()` unconditionally raises `ValueError`.
+3. **`AuditLog`** — I enforce a `ValueError` in `save()` if `pk` is set, and `delete()` unconditionally raises `ValueError`.
 
 **Three PROTECT constraints prevent orphaning:**
 
-- `ActivityRow.raw_upload` — RawUpload cannot be deleted while ActivityRow references it.
-- `AuditLog.activity_row` — ActivityRow cannot be deleted while AuditLog references it.
-- `ActivityRow.emission_factor_ref` — EmissionFactor cannot be deleted while ActivityRow references it.
+- `ActivityRow.raw_upload` — I prevent `RawUpload` deletion while an `ActivityRow` references it.
+- `AuditLog.activity_row` — I prevent `ActivityRow` deletion while an `AuditLog` references it.
+- `ActivityRow.emission_factor_ref` — I prevent `EmissionFactor` deletion while an `ActivityRow` references it.
 
 ---
 
 ## Unit Normalisation
 
-All parsers normalise raw units to a canonical set before persisting to `ActivityRow.quantity` and `ActivityRow.unit`:
+I designed all parsers to normalise raw units to a canonical set before persisting to `ActivityRow.quantity` and `ActivityRow.unit`:
 
 | Canonical Unit | Source | Raw Inputs | Conversion |
 |----------------|--------|------------|------------|
 | `litres` | SAP | `L` (×1.0), `GAL` (×3.785) | `quantity × multiplier` |
 | `kg` | SAP | `KG` (×1.0) | Pass-through |
-| `m3` | SAP | `M3` (×1.0) | Pass-through |
+| `m3` | SAP | `M3` | Pass-through |
 | `kWh` | SAP, Utility | `KWH` (×1.0), `MWH` (×1000.0) | `quantity × multiplier` |
 | `km` | Travel | Haversine-computed (flights) or raw CSV (ground) | — |
 | `nights` | Travel | Raw CSV (`hotel_nights`) | — |
 
-The original raw values are always preserved in `RawUpload.raw_payload`. The original SAP MEINS code (e.g. `GAL`) and MENGE value (e.g. `132.5`) remain in the JSON, while the ActivityRow stores the converted values (e.g. `501.3125 litres`).
+I always preserve the original raw values in `RawUpload.raw_payload`. The original SAP MEINS code (e.g. `GAL`) and MENGE value (e.g. `132.5`) remain in the JSON, while I store the converted values (e.g. `501.3125 litres`) in the `ActivityRow`.
 
 **Concrete example from the codebase:**
 
@@ -490,7 +488,7 @@ Original: RawUpload.raw_payload = {"MEINS": "GAL", "MENGE": "132.5", ...}
 
 ## Audit Trail
 
-The AuditLog records every state change in the lifecycle of an ActivityRow.
+I use the `AuditLog` to record every state change in the lifecycle of an `ActivityRow`.
 
 ### Actions written by current code
 
@@ -515,34 +513,30 @@ The AuditLog records every state change in the lifecycle of an ActivityRow.
 
 ### 1. Integer PKs vs UUIDs
 
-All models use Django's `BigAutoField` (auto-incrementing 64-bit integer) as the primary key, set globally via:
-
 ```python
 # settings.py line 162
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 ```
 
-**Risk:** Sequential integer PKs are enumerable — an attacker can guess valid IDs and probe endpoints like `/api/rows/1/approve/`. They also leak information about table size and insertion rate.
-
-**Production change:** Replace with `UUIDField(primary_key=True, default=uuid.uuid4, editable=False)` on all models. This would require a migration and updates to all FK references.
+I used integer PKs to keep shell queries and tests readable.
+The risk is that sequential IDs are guessable and leak table size.
+The fix is to replace them with UUIDs — it is a single field change plus a migration, but it needs to happen before any client data goes to production.
 
 ### 2. Inline Normalisation vs Separate Pipeline
 
-Unit normalisation, scope assignment, emission factor application, and billing-period splitting are all performed inline within each parser function (`parse_sap_file`, `parse_utility_file`, `parse_travel_file`). This means:
-
-- Normalisation logic is duplicated across parsers where applicable.
-- There is no way to re-run normalisation without re-uploading.
-- Testing requires database fixtures (parsers touch the DB directly).
-
-In production, these steps would be extracted into a separate normalisation pipeline, with pure-function transforms followed by a single persistence layer.
+I put unit normalisation, scope assignment, emission factor application, and billing-period splitting inline within each parser function because it was the fastest way to get data flowing end-to-end.
+The risk is that normalisation logic is duplicated across parsers, and we cannot re-run normalisation without re-uploading the file.
+The fix is to extract these steps into a separate normalisation pipeline — this requires a moderate refactor to separate pure-function transforms from the persistence layer.
 
 ### 3. Hardcoded Emission Factors in Parsers
 
-~~All emission factors are hardcoded as module-level constants. No versioning, no per-client overrides, no effective-date ranges.~~
+I left emission factors hardcoded as module-level constants in the parsers because the `EmissionFactor` database schema was only just introduced.
+The risk is that parsers are not yet using versioned, client-specific factors, meaning calculations lack full auditability.
+The fix is to wire the parsers to query the `EmissionFactor` table and populate `emission_factor_ref` — this is a low-effort change but requires updating all parser tests.
 
-**Partially resolved.** The `EmissionFactor` model now exists (see §4 above) and 10 global factors are seeded on `GET /api/setup/`. The `ActivityRow.emission_factor_ref` FK links each row to the versioned factor used.
+The `EmissionFactor` model now exists (see §4) and 10 global factors are seeded on `GET /api/setup/`. The `ActivityRow.emission_factor_ref` FK links each row to the versioned factor used.
 
-**However**, the parsers (`sap_parser.py`, `utility_parser.py`, `travel_parser.py`) still use hardcoded module-level constants for the actual calculation. They do not yet query the `EmissionFactor` table or populate `emission_factor_ref`. The database schema is ready; the parser wiring is the remaining step. See `TRADEOFFS.md` for details.
+However, the parsers (`sap_parser.py`, `utility_parser.py`, `travel_parser.py`) still use hardcoded module-level constants for the actual calculation. They do not yet query the `EmissionFactor` table or populate `emission_factor_ref`. The database schema is ready; the parser wiring is the remaining step. See `TRADEOFFS.md` for details.
 
 **Constants still in use by parsers:**
 
@@ -561,23 +555,27 @@ In production, these steps would be extracted into a separate normalisation pipe
 
 ### 4. Plant Code Lookup
 
-Plant codes are currently seeded via the `SetupView` endpoint with five hardcoded demo entries. Any SAP row referencing a WERKS code not in this list is flagged with:
+I seeded five hardcoded demo entries via the `SetupView` endpoint because we needed sample data for the prototype dashboard.
+The risk is that any real-world SAP file will flag nearly every row with a "Plant code not found" error.
+The fix is to populate this table from the client's SAP T001W master data — this requires building a bulk import endpoint or SAP integration, which is a medium-effort feature.
+
+Any SAP row referencing a WERKS code not in this list is flagged with:
 
 ```
 "Plant code '<code>' not found in reference table for client '<slug>'."
 ```
 
-In production, this table needs to be populated from the client's SAP T001W master data, ideally via a bulk import or SAP integration. The current approach means any real-world SAP file will flag nearly every row.
-
 ### 5. Flight Distance via Hardcoded Airport Coordinates
+
+I hardcoded 10 airports in `AIRPORT_COORDS` because it was enough to prove the haversine calculation worked for demo flights.
+The risk is that any IATA code outside this small set causes a `ValueError` and flags the row.
+The fix is to integrate a complete airport database or external API — this is a simple data-loading task but adds an external dependency.
 
 The travel parser computes flight distances using great-circle haversine with only **10 hardcoded airports** in `AIRPORT_COORDS`:
 
 ```
 BOM, DEL, LHR, BLR, MAA, HYD, CCU, DXB, SIN, JFK
 ```
-
-Any IATA code outside this set causes a `ValueError` and the row is flagged. A production system would use a comprehensive airport database or an external API.
 
 ### 6. CORS Configuration
 
@@ -586,11 +584,11 @@ Any IATA code outside this set causes a `ValueError` and the row is flagged. A p
 CORS_ALLOW_ALL_ORIGINS = config("CORS_ALLOW_ALL", default=True, cast=bool)
 ```
 
-`CORS_ALLOW_ALL_ORIGINS` defaults to `True` — any origin can call the API. This is acceptable for a prototype but must be restricted in production to specific frontend domains.
+I set `CORS_ALLOW_ALL_ORIGINS` to `True` because it allowed the local frontend to connect to the backend without friction.
+The risk is that any origin can call the API, leaving it open to unauthorized clients.
+The fix is to restrict this to specific frontend domains — it is a trivial one-line settings change before deployment.
 
 ### 7. Health Check Endpoint
-
-The root path (`/`) returns a simple JSON health check (defined in `urls.py`):
 
 ```python
 def health_check(request):
@@ -600,3 +598,10 @@ def health_check(request):
         "version": "1.0.0",
     })
 ```
+
+I added a simple JSON health check at the root path (`/`) because I needed to verify the web server was responding.
+The risk is that it only proves the web server is running, not that the database or parsers are actually healthy.
+The fix is to add a database ping to the health check — this is a quick five-minute update to the view.
+
+---
+VERIFY: Compare section count against original — should be identical.
