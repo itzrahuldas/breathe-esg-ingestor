@@ -80,27 +80,32 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
-        from ingestor.models import Client
-        if Client.objects.filter(slug="breathe-demo-corp").exists():
-            self.stdout.write("Demo data already exists. Skipping seed.")
-            return
+        try:
+            from ingestor.models import Client
+            if Client.objects.filter(slug="breathe-demo-corp").exists():
+                self.stdout.write("Demo data already exists. Skipping seed.")
+                return
 
-        if options["reset"]:
-            self._reset()
+            if options["reset"]:
+                self._reset()
 
-        with transaction.atomic():
-            client = self._create_client()
-            user   = self._create_superuser()
-            self._create_plant_codes(client)
+            with transaction.atomic():
+                client = self._create_client()
+                user   = self._create_superuser()
+                self._create_plant_codes(client)
 
-            sap_ids = self._parse_sap(client, user)
-            uti_ids = self._parse_utility(client, user)
-            trv_ids = self._parse_travel(client, user)
+                sap_ids = self._parse_sap(client, user)
+                uti_ids = self._parse_utility(client, user)
+                trv_ids = self._parse_travel(client, user)
 
-            all_ids = sap_ids + uti_ids + trv_ids
-            self._simulate_lifecycle(all_ids, client, user)
+                all_ids = sap_ids + uti_ids + trv_ids
+                self._simulate_lifecycle(all_ids, client, user)
 
-        self._print_summary(client, sap_ids, uti_ids, trv_ids)
+            self._print_summary(client, sap_ids, uti_ids, trv_ids)
+        except Exception as e:
+            import traceback
+            self.stderr.write(f"Seed failed: {str(e)}")
+            self.stderr.write(traceback.format_exc())
 
     # ------------------------------------------------------------------
     # Private helpers

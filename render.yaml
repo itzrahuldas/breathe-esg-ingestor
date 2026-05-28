@@ -10,7 +10,7 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
-    startCommand: python manage.py migrate && python manage.py seed_mock_data && gunicorn config.wsgi --log-file -
+    startCommand: python manage.py migrate --no-input && (python manage.py seed_mock_data || echo "Seed skipped") && gunicorn config.wsgi --log-file -
     plan: free
     envVars:
       - key: DJANGO_SECRET_KEY
