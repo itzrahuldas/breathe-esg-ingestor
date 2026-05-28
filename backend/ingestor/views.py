@@ -637,8 +637,8 @@ class SetupView(APIView):
 
     def get(self, request: Request) -> Response:
         client, client_created = Client.objects.get_or_create(
-            pk=1,
-            defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"},
+            slug="breathe-demo-corp",
+            defaults={"name": "Breathe Demo Corp"},
         )
 
         pc_created = 0
@@ -775,7 +775,7 @@ class SeedStatusView(APIView):
                 "message": "Seed data was missing — reseeded successfully.",
                 "output": seed_output,
                 "counts": {
-                    "clients": Client.objects.count(),
+                    "clients": Client.objects.filter(slug="breathe-demo-corp").count(),
                     "emission_factors": EmissionFactor.objects.filter(
                         client=None
                     ).count(),
@@ -788,7 +788,7 @@ class SeedStatusView(APIView):
             "status": "ok",
             "message": "Seed data is present. No action needed.",
             "counts": {
-                "clients": Client.objects.count(),
+                "clients": Client.objects.filter(slug="breathe-demo-corp").count(),
                 "client_pk": client.pk,
                 "emission_factors": ef_count,
                 "plant_codes": pc_count,
@@ -823,12 +823,21 @@ class FixDuplicateClientsView(APIView):
         deleted_pks = list(to_delete.values_list('pk', flat=True))
         to_delete.delete()
 
-        return Response({
+        response_data = {
             "status": "fixed",
             "kept_pk": best.pk,
             "deleted_pks": deleted_pks,
             "message": f"Kept pk={best.pk}, deleted {deleted_pks}"
-        })
+        }
+
+        # Also clean up any acme test clients
+        acme_clients = Client.objects.filter(slug="acme-corp-ltd")
+        acme_count = acme_clients.count()
+        if acme_count > 0:
+            acme_clients.delete()
+            response_data["also_deleted_acme"] = acme_count
+
+        return Response(response_data)
 
 
 class DeleteAllDataView(APIView):

@@ -81,7 +81,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from ingestor.models import Client
-        if Client.objects.filter(name="Breathe Demo Corp").exists():
+        if Client.objects.filter(slug="breathe-demo-corp").exists():
             self.stdout.write("Demo data already exists. Skipping seed.")
             return
 
@@ -123,16 +123,20 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def _create_client(self) -> Client:
-        client, created = Client.objects.get_or_create(
-            slug="breathe-demo-corp",
-            defaults={
-                "name": "Breathe Demo Corp",
-            }
-        )
-        if not created:
+        client = Client.objects.filter(
+            slug="breathe-demo-corp"
+        ).first()
+
+        if client is None:
+            client = Client.objects.create(
+                name="Breathe Demo Corp",
+                slug="breathe-demo-corp"
+            )
+            self.stdout.write(f"[OK]   Created client: {client.name} (pk={client.pk})")
+        else:
             self.stdout.write("Client already exists. Using existing.")
-        verb = "Created" if created else "Found existing"
-        self.stdout.write(f"[OK]   {verb} client: {client.name} (pk={client.pk})")
+            self.stdout.write(f"[OK]   Found existing client: {client.name} (pk={client.pk})")
+        
         return client
 
     # ------------------------------------------------------------------
