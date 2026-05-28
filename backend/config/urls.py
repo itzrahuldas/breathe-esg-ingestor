@@ -15,17 +15,58 @@ from ingestor.views import (
     RejectRowView,
     RowListView,
     SetupView,
+    RunMigrationsView,
+    SeedStatusView,
     SummaryView,
     UploadView,
 )
 
 
 def health_check(request):
-    """Bug 3 fix: root path returns JSON health check instead of 404."""
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+
+    # Check pending migrations
+    try:
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        pending = executor.migration_plan(targets)
+        pending_list = [str(m) for m, _ in pending]
+    except Exception as e:
+        pending_list = [f"ERROR: {str(e)}"]
+
+    # Check DB connection
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        db_status = "ok"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+
+    # Check key model counts
+    try:
+        from ingestor.models import (
+            Client, EmissionFactor, ActivityRow,
+            RawUpload, AuditLog
+        )
+        model_counts = {
+            "clients": Client.objects.count(),
+            "emission_factors": EmissionFactor.objects.count(),
+            "activity_rows": ActivityRow.objects.count(),
+            "raw_uploads": RawUpload.objects.count(),
+            "audit_logs": AuditLog.objects.count(),
+        }
+    except Exception as e:
+        model_counts = {"error": str(e)}
+
     return JsonResponse({
         "status": "ok",
         "service": "breathe-esg-backend",
         "version": "1.0.0",
+        "database": db_status,
+        "pending_migrations": pending_list,
+        "pending_migration_count": len(pending_list),
+        "model_counts": model_counts,
     })
 
 
@@ -35,6 +76,12 @@ urlpatterns = [
 
     # One-time demo bootstrap — creates Client pk=1 and PlantCodes
     path("api/setup/", SetupView.as_view(), name="api-setup"),
+
+    # Run pending migrations (when shell is unavailable)
+    path("api/run-migrations/", RunMigrationsView.as_view(), name="api-run-migrations"),
+
+    # Check and reseed data if missing
+    path("api/seed-status/", SeedStatusView.as_view(), name="api-seed-status"),
 
     # Danger zone — wipe all client data and reseed demo dataset
     path("api/delete-all/", DeleteAllDataView.as_view(), name="api-delete-all"),

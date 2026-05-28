@@ -32,6 +32,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 
 from .models import ActivityRow, AuditLog, Client, PlantCode, RawUpload
 from .parsers.sap_parser import parse_sap_file
@@ -665,6 +666,136 @@ class SetupView(APIView):
 # ===========================================================================
 # DELETE /api/delete-all/  — wipe all data for a client and reseed
 # ===========================================================================
+
+class RunMigrationsView(APIView):
+    """
+    GET /api/run-migrations/
+    Runs pending Django migrations programmatically.
+    Safe to call multiple times — only applies pending migrations.
+    Used when Render Shell is not available.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from django.db.migrations.executor import MigrationExecutor
+        from django.db import connection
+        from django.core.management import call_command
+        import io
+
+        # Check pending migrations first
+        try:
+            executor = MigrationExecutor(connection)
+            targets = executor.loader.graph.leaf_nodes()
+            pending = executor.migration_plan(targets)
+            pending_list = [str(m) for m, _ in pending]
+        except Exception as e:
+            return Response(
+                {"error": f"Could not check migrations: {str(e)}"},
+                status=500
+            )
+
+        if not pending_list:
+            return Response({
+                "status": "nothing_to_do",
+                "message": "No pending migrations. Database is up to date.",
+                "pending": []
+            })
+
+        # Run migrations
+        try:
+            out = io.StringIO()
+            call_command("migrate", "--no-input", stdout=out)
+            output = out.getvalue()
+        except Exception as e:
+            return Response(
+                {
+                    "status": "error",
+                    "message": str(e),
+                    "pending_before": pending_list
+                },
+                status=500
+            )
+
+        # Verify no pending migrations remain
+        try:
+            executor2 = MigrationExecutor(connection)
+            targets2 = executor2.loader.graph.leaf_nodes()
+            still_pending = executor2.migration_plan(targets2)
+            still_pending_list = [str(m) for m, _ in still_pending]
+        except Exception:
+            still_pending_list = []
+
+        return Response({
+            "status": "success",
+            "applied": pending_list,
+            "still_pending": still_pending_list,
+            "output": output,
+        })
+
+
+class SeedStatusView(APIView):
+    """
+    GET /api/seed-status/
+    Shows current seed state and runs seed if needed.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from ingestor.models import (
+            Client, EmissionFactor, PlantCode, ActivityRow
+        )
+
+        client = Client.objects.filter(
+            slug="breathe-demo-corp"
+        ).first()
+
+        ef_count = EmissionFactor.objects.filter(client=None).count()
+        pc_count = PlantCode.objects.count()
+        row_count = ActivityRow.objects.count()
+
+        needs_seed = (
+            client is None or
+            ef_count == 0 or
+            pc_count == 0
+        )
+
+        if needs_seed:
+            # Run seed
+            from django.core.management import call_command
+            import io
+            out = io.StringIO()
+            call_command("seed_mock_data", stdout=out)
+            seed_output = out.getvalue()
+
+            # Also seed emission factors
+            seed_emission_factors()
+
+            return Response({
+                "status": "seeded",
+                "message": "Seed data was missing — reseeded successfully.",
+                "output": seed_output,
+                "counts": {
+                    "clients": Client.objects.count(),
+                    "emission_factors": EmissionFactor.objects.filter(
+                        client=None
+                    ).count(),
+                    "plant_codes": PlantCode.objects.count(),
+                    "activity_rows": ActivityRow.objects.count(),
+                }
+            })
+
+        return Response({
+            "status": "ok",
+            "message": "Seed data is present. No action needed.",
+            "counts": {
+                "clients": Client.objects.count(),
+                "client_pk": client.pk,
+                "emission_factors": ef_count,
+                "plant_codes": pc_count,
+                "activity_rows": row_count,
+            }
+        })
+
 
 class DeleteAllDataView(APIView):
     """
