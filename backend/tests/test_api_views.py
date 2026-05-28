@@ -138,8 +138,8 @@ class TestUploadView(ApiTestBase):
         )
         self.assertEqual(resp.status_code, 400)
 
-    def test_unknown_client_id_auto_created_200(self):
-        """UploadView uses get_or_create — unknown integer client_id is auto-created."""
+    def test_unknown_client_id_returns_400(self):
+        """UploadView now returns 400 if client is not found."""
         resp = self.api.post(
             "/api/upload/",
             data={
@@ -149,7 +149,7 @@ class TestUploadView(ApiTestBase):
             },
             format="multipart",
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 400)
 
     def test_non_integer_client_id_400(self):
         resp = self.api.post(

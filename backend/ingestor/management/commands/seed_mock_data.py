@@ -124,9 +124,13 @@ class Command(BaseCommand):
 
     def _create_client(self) -> Client:
         client, created = Client.objects.get_or_create(
-            pk=1,
-            defaults={"name": CLIENT_NAME, "slug": CLIENT_SLUG},
+            slug="breathe-demo-corp",
+            defaults={
+                "name": "Breathe Demo Corp",
+            }
         )
+        if not created:
+            self.stdout.write("Client already exists. Using existing.")
         verb = "Created" if created else "Found existing"
         self.stdout.write(f"[OK]   {verb} client: {client.name} (pk={client.pk})")
         return client

@@ -155,12 +155,24 @@ class UploadView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Auto-create the demo client if it doesn't exist yet
-            # (handles cold-start on Render before seed_mock_data has run)
-            client, _ = Client.objects.get_or_create(
-                pk=client_id,
-                defaults={"name": "Breathe Demo Corp", "slug": "breathe-demo-corp"},
-            )
+            # Try to find existing client first
+            client = Client.objects.filter(pk=client_id).first()
+
+            if client is None:
+                # Client not found — look up by slug instead
+                client = Client.objects.filter(
+                    slug="breathe-demo-corp"
+                ).first()
+
+            if client is None:
+                # No client exists at all — return clear error
+                return Response(
+                    {
+                        "error": f"Client {client_id} not found. "
+                                  "Run /api/setup/ first to initialise demo data."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             # --- Parse ---
             _, parser_fn = _SOURCE_TYPE_MAP[source_type]
@@ -687,21 +699,36 @@ class DeleteAllDataView(APIView):
                 "DELETE FROM ingestor_auditlog WHERE client_id = %s", [client.pk]
             )
 
-        # Now safe to delete in FK order
+        # Wipe data rows only — keep the Client row itself
         ActivityRow.objects.filter(client=client).delete()
         RawUpload.objects.filter(client=client).delete()
         PlantCode.objects.filter(client=client).delete()
-        client.delete()
 
-        # Re-seed: deleting the client lets the name-guard in seed_mock_data pass
-        from django.core.management import call_command
-        call_command("seed_mock_data")
+        # Re-seed plant codes and emission factors only
+        # (do NOT recreate the Client — keep its pk stable)
+        from ingestor.models import PlantCode
+        plant_codes = [
+            {"code": "IN01", "site_name": "Mumbai Plant",    "country": "India"},
+            {"code": "IN02", "site_name": "Pune Plant",      "country": "India"},
+            {"code": "IN03", "site_name": "Chennai Plant",   "country": "India"},
+            {"code": "DE07", "site_name": "Frankfurt Plant", "country": "Germany"},
+            {"code": "IN04", "site_name": "Delhi Plant",     "country": "India"},
+        ]
+        for pc in plant_codes:
+            PlantCode.objects.get_or_create(
+                client=client,
+                code=pc["code"],
+                defaults={"site_name": pc["site_name"], "country": pc["country"]}
+            )
+
+        seed_emission_factors()
 
         return Response({
             "message": "All data deleted and demo data reseeded.",
+            "client_id": client.pk,
             "deleted": {
                 "activity_rows": row_count,
-                "raw_uploads":   upload_count,
-                "audit_logs":    audit_count,
-            },
+                "raw_uploads": upload_count,
+                "audit_logs": audit_count
+            }
         }, status=status.HTTP_200_OK)
