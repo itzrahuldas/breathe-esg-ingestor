@@ -4,6 +4,8 @@ A prototype ESG (Environmental, Social & Governance) data ingestion and review
 platform. Upload carbon-activity CSVs from SAP, utility bills, or travel
 bookings — review, flag, approve, and audit every row with full traceability.
 
+![Architecture Diagram](Architecture%20Diagram.png)
+
 ---
 
 ## Demo
